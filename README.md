@@ -4,7 +4,7 @@ Redshift is a very narrow-scope sandbox that filters Discord's view of process
 names, such as those used for game detection.
 
 Redshift is a native x64 Windows 11 application. It does not install a driver,
-service, global hook and it does not modify Discord on disk. It runs without
+service, or global hook, and it does not modify Discord on disk. It runs without
 administrator privileges. Discord screen sharing and application capture are
 designed to continue working normally.
 
@@ -109,13 +109,15 @@ Run the commands below from the **x64 Native Tools Command Prompt for Visual
 Studio**. A 32-bit configuration is rejected because it cannot inject into
 64-bit Discord.
 
-Ninja
+### Ninja
+
 ```powershell
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-Visual Studio
+### Visual Studio
+
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
