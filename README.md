@@ -7,7 +7,7 @@ service, global hook and it does not modify Discord on disk. It runs without
 administrator privileges. Discord screen sharing and application capture are
 designed to continue working normally.
 
-The desktop client can enumerate other programs on the PC. Discord's activity
+The Discord desktop client can enumerate other programs on the PC. Discord's activity
 privacy settings control whether that activity is shown to others but they do not
 offer a way to stop the client from reading process names locally. Redshift
 exists only in lieu of that option, on the machine you already control. The
