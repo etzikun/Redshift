@@ -36,10 +36,8 @@ These binaries are not Authenticode-signed. Windows SmartScreen should show
 **More info** and **Run anyway**. Do not turn SmartScreen off.
 
 Windows 11 **Smart App Control** can block unsigned software outright.
-Do not disable Smart App Control or other security software.
-
-VirusTotal results can be found here:
-[VirusTotal](https://www.virustotal.com/gui/file/6ceffa1fdcaf94808257951c0d22b7aa5120e1647486680aa424e889472f2573)
+Allow this app only if you choose to run it, or build from
+source. Do not disable Smart App Control or other security software.
 
 Quit Discord completely before launching it through Redshift. An existing
 Discord instance cannot be retroactively protected.
@@ -52,9 +50,28 @@ Discord installs updates into versioned `app-*` directories. A saved path is
 resolved to the newest installed `Discord.exe` before each launch. The selected
 path is stored locally in `%LOCALAPPDATA%\Redshift\settings.ini`.
 
-**Create desktop shortcut** writes `Discord (Redshift).lnk` to the desktop. The
-shortcut starts Redshift in headless mode, launches protected Discord, then
-exits cleanly. Recreate the shortcut if `Redshift.exe` is moved.
+### Desktop shortcut
+
+To create a normal shortcut, right-click `Redshift.exe`, select **Show more
+options**, then **Send to > Desktop (create shortcut)**.
+
+For one-click protected launch, first select Discord in Redshift and copy the
+displayed path. Open the shortcut's **Properties** and append the following to
+its **Target**, replacing the example with that path:
+
+```text
+ --launch "C:\Users\you\AppData\Local\Discord\app-1.0.0000\Discord.exe"
+```
+
+Keep the existing quoted path to `Redshift.exe` before these arguments. The
+complete Target should resemble:
+
+```text
+"C:\Tools\Redshift\Redshift.exe" --launch "C:\Users\you\AppData\Local\Discord\app-1.0.0000\Discord.exe"
+```
+
+The Discord path in the shortcut is resolved to the newest installed version
+when it is used. Recreate or update the shortcut if `Redshift.exe` is moved.
 
 Explicit launch errors are appended to
 `%LOCALAPPDATA%\Redshift\launch.log`. Successful launches are not logged, and
