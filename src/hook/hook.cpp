@@ -17,11 +17,11 @@ using Process32Fn = BOOL (WINAPI*)(HANDLE, LPPROCESSENTRY32W);
 Process32Fn g_processFirst{};
 Process32Fn g_processNext{};
 char g_hookPath[MAX_PATH]{};
-constexpr wchar_t kHookStatusVariable[] = L"REDSHIFT_HOOK_STATUS_EVENT";
+constexpr wchar_t kLaunchStatusVariable[] = L"REDSHIFT_LAUNCH_STATUS";
 
 bool SignalStatus(const wchar_t* suffix) {
     wchar_t base[96]{};
-    const DWORD length = GetEnvironmentVariableW(kHookStatusVariable, base, ARRAYSIZE(base));
+    const DWORD length = GetEnvironmentVariableW(kLaunchStatusVariable, base, ARRAYSIZE(base));
     if (!length || length >= ARRAYSIZE(base)) return false;
     wchar_t name[112]{};
     if (wcscpy_s(name, base) || wcscat_s(name, suffix)) return false;
@@ -34,7 +34,7 @@ bool SignalStatus(const wchar_t* suffix) {
 
 bool StatusRequested() {
     wchar_t value[2]{};
-    const DWORD length = GetEnvironmentVariableW(kHookStatusVariable, value, ARRAYSIZE(value));
+    const DWORD length = GetEnvironmentVariableW(kLaunchStatusVariable, value, ARRAYSIZE(value));
     return length != 0 || GetLastError() != ERROR_ENVVAR_NOT_FOUND;
 }
 
@@ -201,7 +201,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
             if (statusRequested) SignalStatus(L".Failed");
             return FALSE;
         }
-        if (statusRequested) SetEnvironmentVariableW(kHookStatusVariable, nullptr);
+        if (statusRequested) SetEnvironmentVariableW(kLaunchStatusVariable, nullptr);
     } else if (reason == DLL_PROCESS_DETACH && g_query && DetourTransactionBegin() == NO_ERROR) {
         DetourUpdateThread(GetCurrentThread());
         DetourDetach(reinterpret_cast<PVOID*>(&g_query), reinterpret_cast<PVOID>(PrivacyQuery));
