@@ -30,13 +30,6 @@ Prebuilt files are found in `Redshift-1.0.zip`. Keep them together:
 - `Redshift.exe`
 - `RedshiftPrivacyHook.dll`
 
-These binaries are not Authenticode-signed. Windows SmartScreen may show
-**Windows protected your PC**. If you trust this build, use
-**More info** and **Run anyway**. Do not turn SmartScreen off.
-
-Windows 11 **Smart App Control** may block unsigned software and does not offer
-per-app exceptions. Do not disable it solely to run Redshift.
-
 Quit Discord completely before launching it through Redshift. An existing
 Discord instance cannot be retroactively protected.
 
@@ -79,6 +72,13 @@ filter to later Discord child processes. Other child applications are started
 normally.
 
 ## Security
+
+The prebuilt binaries are not Authenticode-signed. Windows SmartScreen may show
+**Windows protected your PC**. If you trust this build, use
+**More info** and **Run anyway**. Do not turn SmartScreen off.
+
+Windows 11 **Smart App Control** may block unsigned software and does not offer
+per-app exceptions. Do not disable it solely to run Redshift.
 
 Redshift is not a security boundary. Discord retains its normal access to files,
 devices, the network, windows, and other user resources, and it can detect the
