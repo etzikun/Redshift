@@ -25,10 +25,14 @@ software actions, or other damage resulting from its use or inability to work.
 
 ## Usage
 
-Prebuilt files are found in `Redshift-1.0.zip`. Keep them together:
+This repository ships source only. Build it (see **Build**) and keep these
+outputs together:
 
 - `Redshift.exe`
 - `RedshiftPrivacyHook.dll`
+
+Prebuilt binaries are not published. An unsigned injector is often flagged by
+Microsoft Defender even when the software is legitimate.
 
 Quit Discord completely before launching it through Redshift. An existing
 Discord instance cannot be retroactively protected.
@@ -73,9 +77,9 @@ normally.
 
 ## Security
 
-The prebuilt binaries are not Authenticode-signed. Windows SmartScreen may show
-**Windows protected your PC**. If you trust this build, use
-**More info** and **Run anyway**. Do not turn SmartScreen off.
+A local Release build is not Authenticode-signed. Windows SmartScreen may show
+**Windows protected your PC**. If you built it from this source and trust that
+build, use **More info** and **Run anyway**. Do not turn SmartScreen off.
 
 Windows 11 **Smart App Control** may block unsigned software and does not offer
 per-app exceptions. Do not disable it solely to run Redshift.
