@@ -36,8 +36,7 @@ These binaries are not Authenticode-signed. Windows SmartScreen should show
 **More info** and **Run anyway**. Do not turn SmartScreen off.
 
 Windows 11 **Smart App Control** can block unsigned software outright.
-Allow this app only if you choose to run it, or build from
-source. Do not disable Smart App Control or other security software.
+Do not disable Smart App Control or other security software.
 
 VirusTotal results can be found here:
 [VirusTotal](https://www.virustotal.com/gui/file/6ceffa1fdcaf94808257951c0d22b7aa5120e1647486680aa424e889472f2573)
