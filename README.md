@@ -1,13 +1,10 @@
 # Redshift
 Redshift is a very narrowly-scoped sandbox to filter Discord's view of process names, i.e game detection.
 
-Redshift starts the installed Discord desktop client with host process names
-filtered from its view. Discord screen sharing and application capture are
-designed to continue working normally.
-
 Redshift is a native x64 Windows 11 application. It does not install a driver,
-service, AppCompat database, or global hook, and it does not modify Discord on
-disk. It runs without administrator privileges.
+service, global hook and it does not modify Discord on disk. It runs without
+administrator privileges. Discord screen sharing and application capture are
+designed to continue working normally.
 
 The desktop client can enumerate other programs on the PC. Discord's activity
 privacy settings control whether that activity is shown to others but they do not
@@ -19,6 +16,12 @@ can see. Redshift is a very narrow-scope sandbox for that one case: it filters
 Discord's view of process names only. It does not isolate files, devices, the
 network, windows, or other system resources. It is not a Discord product. This
 is the project's sole purpose.
+
+## Liability
+
+Redshift is provided as-is, without warranty. Use it at your own risk. The authors
+are not responsible for ToS/account issues, data loss, service disruption, security
+software actions, or other damage resulting from its use or inability to work.
 
 ## Usage
 
@@ -37,8 +40,6 @@ Discord instance cannot be retroactively protected.
 Discord installs updates into versioned `app-*` directories. A saved path is
 resolved to the newest installed `Discord.exe` before each launch. The selected
 path is stored locally in `%LOCALAPPDATA%\Redshift\settings.ini`.
-
-### Desktop shortcut
 
 **Create desktop shortcut** writes `Discord (Redshift).lnk` to the desktop. The
 shortcut starts Redshift in headless mode, launches protected Discord, then
@@ -70,12 +71,6 @@ The hook is local to Discord instances started by Redshift. It does not hide
 windows, files, services, drivers or network activity.
 
 Endpoint protection may flag DLL injection even when the software is legitimate.
-
-## Liability
-
-Redshift is provided as-is, without warranty. Use it at your own risk. The authors
-are not responsible for ToS/account issues, data loss, service disruption, security
-software actions, or other damage resulting from its use or inability to work.
 
 ## Build
 
