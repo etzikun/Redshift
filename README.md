@@ -7,8 +7,8 @@ service, global hook and it does not modify Discord on disk. It runs without
 administrator privileges. Discord screen sharing and application capture are
 designed to continue working normally.
 
-The Discord desktop client can enumerate other programs on the PC. Discord's activity
-privacy settings control whether that activity is shown to others but they do not
+The desktop client can enumerate other programs on the PC. Discord's activity
+privacy settings control whether that activity is shown to others, but they do not
 offer a way to stop the client from reading process names locally. Redshift
 exists only in lieu of that option, on the machine you already control. The
 same kind of limit is often applied by running the desktop client in a sandbox
@@ -26,10 +26,21 @@ software actions, or other damage resulting from its use or inability to work.
 
 ## Usage
 
-Keep these files together:
+Prebuilt files are found in `Redshift-1.0.zip`. Keep them together:
 
-- `Redshift.exe`
-- `RedshiftPrivacyHook.dll`
+- `bin/Redshift.exe`
+- `bin/RedshiftPrivacyHook.dll`
+
+These binaries are not Authenticode-signed. Windows SmartScreen should show
+**Windows protected your PC**. If you trust this build, use
+**More info** and **Run anyway**. Do not turn SmartScreen off.
+
+Windows 11 **Smart App Control** can block unsigned software outright.
+Allow this app only if you choose to run it, or build from
+source. Do not disable Smart App Control or other security software.
+
+VirusTotal results can be found here:
+[VirusTotal](https://www.virustotal.com/gui/file/6ceffa1fdcaf94808257951c0d22b7aa5120e1647486680aa424e889472f2573)
 
 Quit Discord completely before launching it through Redshift. An existing
 Discord instance cannot be retroactively protected.
@@ -46,7 +57,8 @@ path is stored locally in `%LOCALAPPDATA%\Redshift\settings.ini`.
 shortcut starts Redshift in headless mode, launches protected Discord, then
 exits cleanly. Recreate the shortcut if `Redshift.exe` is moved.
 
-Explicit launch errors are appended to `%LOCALAPPDATA%\Redshift\launch.log`. 
+Explicit launch errors are appended to
+`%LOCALAPPDATA%\Redshift\launch.log`. Successful launches are not logged, and
 Redshift does not transmit the settings or log data.
 
 ## How it works
@@ -77,9 +89,9 @@ Do not disable or bypass security software to run Redshift.
 
 Microsoft Detours 4.0.1 is vendored under `third_party/detours` under the MIT
 license. A Release build produces `Redshift.exe` and
-`RedshiftPrivacyHook.dll`
-
+`RedshiftPrivacyHook.dll`.
 Build requirements:
+
 - Windows 11, x64
 - Visual Studio 2022 or Visual Studio Build Tools with:
   - Desktop development with C++
@@ -92,13 +104,13 @@ Run the commands below from the **x64 Native Tools Command Prompt for Visual
 Studio**. A 32-bit configuration is rejected because it cannot inject into
 64-bit Discord.
 
-Ninja (powershell)
+Ninja
 ```powershell
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-Visual Studio (powershell)
+Visual Studio
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
