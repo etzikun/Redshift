@@ -5,8 +5,8 @@
 #include <commdlg.h>
 #include <detours.h>
 #include <dwmapi.h>
+#include <objbase.h>
 #include <shellapi.h>
-#include <shlobj.h>
 #include <softpub.h>
 #include <tlhelp32.h>
 #include <uxtheme.h>
@@ -20,7 +20,7 @@ namespace {
 constexpr wchar_t kClass[] = L"RedshiftWindow";
 constexpr wchar_t kTitle[] = L"Redshift";
 constexpr wchar_t kHookStatusVariable[] = L"REDSHIFT_HOOK_STATUS_EVENT";
-enum { IdPath = 1001, IdBrowse, IdLaunch, IdShortcut, IdLog, IdStatus, IdHint };
+enum { IdPath = 1001, IdBrowse, IdLaunch, IdLog, IdStatus, IdHint };
 HINSTANCE g_instance{};
 HWND g_window{}, g_path{}, g_status{}, g_hint{};
 HFONT g_font{}, g_titleFont{};
@@ -341,30 +341,6 @@ bool Launch(std::wstring& error) {
     if (!LaunchPath(target, error)) return false;
     Save(); return true;
 }
-bool CreateShortcut(std::wstring& error) {
-    const std::filesystem::path discord = ResolveDiscord(Text(g_path));
-    if (!std::filesystem::is_regular_file(discord)) { error = L"Select Discord.exe first."; return false; }
-    PWSTR desktopRaw{};
-    HRESULT result = SHGetKnownFolderPath(FOLDERID_Desktop, KF_FLAG_CREATE, nullptr, &desktopRaw);
-    if (FAILED(result)) { error = L"Couldn't find the Desktop."; return false; }
-    const auto shortcut = std::filesystem::path(desktopRaw) / L"Discord (Redshift).lnk";
-    CoTaskMemFree(desktopRaw);
-    IShellLinkW* link{};
-    result = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link));
-    if (FAILED(result)) { error = L"Couldn't create the shortcut."; return false; }
-    const auto launcher = ModuleDir() / L"Redshift.exe";
-    const std::wstring args = L"--launch \"" + discord.wstring() + L"\"";
-    link->SetPath(launcher.c_str()); link->SetArguments(args.c_str());
-    link->SetWorkingDirectory(launcher.parent_path().c_str());
-    link->SetDescription(L"Launch Discord with Redshift");
-    link->SetIconLocation(discord.c_str(), 0); link->SetShowCmd(SW_HIDE);
-    IPersistFile* persist{};
-    result = link->QueryInterface(IID_PPV_ARGS(&persist));
-    if (SUCCEEDED(result)) { result = persist->Save(shortcut.c_str(), TRUE); persist->Release(); }
-    link->Release();
-    if (FAILED(result)) { error = L"Couldn't save the shortcut."; return false; }
-    Save(); return true;
-}
 HWND Control(const wchar_t* type, const wchar_t* text, DWORD style, int x, int y, int w, int h, int id, DWORD extra = 0) {
     HWND control = CreateWindowExW(extra, type, text, WS_CHILD | WS_VISIBLE | style, x, y, w, h,
         g_window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
@@ -383,8 +359,7 @@ void CreateControls() {
     g_hint = Control(L"STATIC", L"Quit Discord completely before launching. A running instance cannot be protected.",
         0, 20, 134, 620, 18, IdHint);
     Control(L"BUTTON", L"Launch protected Discord", BS_DEFPUSHBUTTON, 20, 166, 196, 30, IdLaunch);
-    Control(L"BUTTON", L"Create desktop shortcut", BS_PUSHBUTTON, 224, 166, 178, 30, IdShortcut);
-    Control(L"BUTTON", L"Open log", BS_PUSHBUTTON, 410, 166, 88, 30, IdLog);
+    Control(L"BUTTON", L"Open log", BS_PUSHBUTTON, 224, 166, 88, 30, IdLog);
     g_status = Control(L"STATIC", L"", SS_LEFT | SS_NOPREFIX, 20, 210, 620, 36, IdStatus);
     Load();
     if (Text(g_path).empty()) Status(L"Select Discord.exe if it was not detected automatically.");
@@ -427,7 +402,6 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case WM_COMMAND:
         if (LOWORD(wParam) == IdBrowse) Browse();
         else if (LOWORD(wParam) == IdLaunch) { std::wstring error; Status(Launch(error) ? L"Launched." : error); }
-        else if (LOWORD(wParam) == IdShortcut) { std::wstring error; Status(CreateShortcut(error) ? L"Shortcut created." : error); }
         else if (LOWORD(wParam) == IdLog) Open(LogPath());
         return 0;
     case WM_CLOSE: Save(); DestroyWindow(window); return 0;
@@ -453,7 +427,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     if (!mutex) return 1;
     if (GetLastError() == ERROR_ALREADY_EXISTS) { CloseHandle(mutex); return 0; }
     g_instance = instance;
-    HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     InitDarkModeSupport();
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES}; InitCommonControlsEx(&controls);
     WNDCLASSEXW wc{sizeof(wc)}; wc.lpfnWndProc = WindowProc; wc.hInstance = instance;
@@ -468,6 +441,5 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     if (!window) return 1;
     ShowWindow(window, show); UpdateWindow(window);
     MSG message{}; while (GetMessageW(&message, nullptr, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageW(&message); }
-    if (SUCCEEDED(com)) CoUninitialize();
     CloseHandle(mutex); return static_cast<int>(message.wParam);
 }
