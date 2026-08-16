@@ -1,5 +1,6 @@
 # Redshift
-Redshift is a very narrowly-scoped sandbox to filter Discord's view of process names, i.e game detection.
+Redshift is a very narrow-scope sandbox that filters Discord's view of process
+names, such as those used for game detection.
 
 Redshift is a native x64 Windows 11 application. It does not install a driver,
 service, global hook and it does not modify Discord on disk. It runs without
@@ -45,9 +46,8 @@ path is stored locally in `%LOCALAPPDATA%\Redshift\settings.ini`.
 shortcut starts Redshift in headless mode, launches protected Discord, then
 exits cleanly. Recreate the shortcut if `Redshift.exe` is moved.
 
-Explicit launch errors are appended to
-`%LOCALAPPDATA%\Redshift\launch.log`. Successful launches are not logged, and
-nothing is transmitted.
+Explicit launch errors are appended to `%LOCALAPPDATA%\Redshift\launch.log`. 
+Redshift does not transmit the settings or log data.
 
 ## How it works
 
@@ -71,6 +71,7 @@ The hook is local to Discord instances started by Redshift. It does not hide
 windows, files, services, drivers or network activity.
 
 Endpoint protection may flag DLL injection even when the software is legitimate.
+Do not disable or bypass security software to run Redshift.
 
 ## Build
 
@@ -79,8 +80,7 @@ license. A Release build produces `Redshift.exe` and
 `RedshiftPrivacyHook.dll`
 
 Build requirements:
-
-- Windows 10 or Windows 11, x64
+- Windows 11, x64
 - Visual Studio 2022 or Visual Studio Build Tools with:
   - Desktop development with C++
   - MSVC C++ toolchain
@@ -88,13 +88,17 @@ Build requirements:
 - CMake 3.20 or newer
 - Ninja, only when using the Ninja commands below
 
-Ninja
+Run the commands below from the **x64 Native Tools Command Prompt for Visual
+Studio**. A 32-bit configuration is rejected because it cannot inject into
+64-bit Discord.
+
+Ninja (powershell)
 ```powershell
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-Visual Studio
+Visual Studio (powershell)
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
