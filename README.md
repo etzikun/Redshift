@@ -28,8 +28,8 @@ software actions, or other damage resulting from its use or inability to work.
 
 Prebuilt files are found in `Redshift-1.0.zip`. Keep them together:
 
-- `bin/Redshift.exe`
-- `bin/RedshiftPrivacyHook.dll`
+- `Redshift.exe`
+- `RedshiftPrivacyHook.dll`
 
 These binaries are not Authenticode-signed. Windows SmartScreen should show
 **Windows protected your PC**. If you trust this build, use
