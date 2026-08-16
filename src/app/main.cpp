@@ -13,13 +13,13 @@
 #include <winreg.h>
 #include <wintrust.h>
 #include <filesystem>
-#include <fstream>
 #include <string>
 
 namespace {
 constexpr wchar_t kClass[] = L"RedshiftWindow";
 constexpr wchar_t kTitle[] = L"Redshift";
-constexpr wchar_t kHookStatusVariable[] = L"REDSHIFT_HOOK_STATUS_EVENT";
+constexpr wchar_t kLaunchStatusVariable[] = L"REDSHIFT_LAUNCH_STATUS";
+constexpr DWORD kHookVerificationTimeoutMs = 30000;
 enum { IdPath = 1001, IdBrowse, IdLaunch, IdLog, IdStatus, IdHint };
 HINSTANCE g_instance{};
 HWND g_window{}, g_path{}, g_status{}, g_hint{};
@@ -124,17 +124,17 @@ void ApplyThemeToWindow() {
     applying = false;
 }
 
-HFONT MakeFont(int points, int weight) {
-    const HDC dc = GetDC(nullptr);
-    const int height = -MulDiv(points, GetDeviceCaps(dc, LOGPIXELSY), 72);
-    ReleaseDC(nullptr, dc);
-    return CreateFontW(height, 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+HFONT MakeFont(int points, int weight, int dpi) {
+    return CreateFontW(-MulDiv(points, dpi, 72), 0, 0, 0, weight, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
         DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 }
 void CreateFonts() {
-    g_font = MakeFont(9, FW_NORMAL);
-    g_titleFont = MakeFont(13, FW_SEMIBOLD);
+    const HDC dc = GetDC(nullptr);
+    const int dpi = dc ? GetDeviceCaps(dc, LOGPIXELSY) : 96;
+    if (dc) ReleaseDC(nullptr, dc);
+    g_font = MakeFont(9, FW_NORMAL, dpi);
+    g_titleFont = MakeFont(13, FW_SEMIBOLD, dpi);
     if (!g_font) g_font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     if (!g_titleFont) g_titleFont = g_font;
 }
@@ -145,14 +145,17 @@ void DestroyFonts() {
     g_font = g_titleFont = nullptr;
 }
 
-std::filesystem::path DataDir() {
-    wchar_t value[32768]{};
-    DWORD size = GetEnvironmentVariableW(L"LOCALAPPDATA", value, ARRAYSIZE(value));
-    auto path = size && size < ARRAYSIZE(value)
-        ? std::filesystem::path(value) / L"Redshift"
-        : std::filesystem::temp_directory_path() / L"Redshift";
-    std::error_code error;
-    std::filesystem::create_directories(path, error);
+const std::filesystem::path& DataDir() {
+    static const std::filesystem::path path = [] {
+        wchar_t value[MAX_PATH]{};
+        const DWORD size = GetEnvironmentVariableW(L"LOCALAPPDATA", value, ARRAYSIZE(value));
+        auto dir = size && size < ARRAYSIZE(value)
+            ? std::filesystem::path(value) / L"Redshift"
+            : std::filesystem::temp_directory_path() / L"Redshift";
+        std::error_code error;
+        std::filesystem::create_directories(dir, error);
+        return dir;
+    }();
     return path;
 }
 std::filesystem::path SettingsPath() { return DataDir() / L"settings.ini"; }
@@ -175,20 +178,18 @@ std::wstring ErrorText(DWORD code) {
     while (!text.empty() && (text.back() == L'\r' || text.back() == L'\n')) text.pop_back();
     return text;
 }
-std::filesystem::path ModuleDir() {
-    wchar_t path[32768]{};
-    DWORD length = GetModuleFileNameW(nullptr, path, ARRAYSIZE(path));
-    return length && length < ARRAYSIZE(path) ? std::filesystem::path(path).parent_path() : std::filesystem::path();
+const std::filesystem::path& ModuleDir() {
+    static const std::filesystem::path path = [] {
+        wchar_t value[MAX_PATH]{};
+        const DWORD length = GetModuleFileNameW(nullptr, value, ARRAYSIZE(value));
+        return length && length < ARRAYSIZE(value)
+            ? std::filesystem::path(value).parent_path() : std::filesystem::path();
+    }();
+    return path;
 }
 bool IsX64(const std::filesystem::path& path) {
-    std::ifstream file(path, std::ios::binary);
-    DWORD offset{}, signature{};
-    WORD machine{};
-    if (!file) return false;
-    file.seekg(0x3c); file.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-    file.seekg(offset); file.read(reinterpret_cast<char*>(&signature), sizeof(signature));
-    file.read(reinterpret_cast<char*>(&machine), sizeof(machine));
-    return file && signature == IMAGE_NT_SIGNATURE && machine == IMAGE_FILE_MACHINE_AMD64;
+    DWORD type{};
+    return GetBinaryTypeW(path.c_str(), &type) != FALSE && type == SCS_64BIT_BINARY;
 }
 bool HasTrustedSignature(const std::filesystem::path& path) {
     WINTRUST_FILE_INFO file{sizeof(file)};
@@ -206,12 +207,12 @@ bool HasTrustedSignature(const std::filesystem::path& path) {
     WinVerifyTrust(nullptr, &policy, &trust);
     return result == ERROR_SUCCESS;
 }
-std::wstring HookEventBase() {
+std::wstring LaunchEventBase() {
     GUID id{};
     if (FAILED(CoCreateGuid(&id))) return {};
     wchar_t value[96]{};
     if (StringFromGUID2(id, value, ARRAYSIZE(value)) <= 0) return {};
-    return L"Local\\Redshift.Hook." + std::wstring(value);
+    return L"Local\\Redshift.Launch." + std::wstring(value);
 }
 class EnvironmentValue {
 public:
@@ -242,25 +243,33 @@ private:
 };
 bool Fail(std::wstring& error, const std::wstring& message) {
     error = message;
-    SYSTEMTIME now{};
-    GetLocalTime(&now);
-    std::wofstream log(LogPath(), std::ios::app);
-    log << now.wYear << L'-' << now.wMonth << L'-' << now.wDay << L' '
-        << now.wHour << L':' << now.wMinute << L':' << now.wSecond
-        << L"  " << message << L'\n';
+    HANDLE log = CreateFileW(LogPath().c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr,
+        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (log != INVALID_HANDLE_VALUE) {
+        SYSTEMTIME now{};
+        GetLocalTime(&now);
+        wchar_t line[1024]{};
+        const int length = swprintf_s(line, L"%u-%u-%u %u:%u:%u  %s\r\n",
+            now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond, message.c_str());
+        if (length > 0) {
+            DWORD written{};
+            WriteFile(log, line, static_cast<DWORD>(length) * sizeof(wchar_t), &written, nullptr);
+        }
+        CloseHandle(log);
+    }
     return false;
 }
 void Save() {
     WritePrivateProfileStringW(L"discord", L"executable", Text(g_path).c_str(), SettingsPath().c_str());
 }
 void Load() {
-    wchar_t saved[32768]{};
+    wchar_t saved[MAX_PATH]{};
     GetPrivateProfileStringW(L"discord", L"executable", L"", saved, ARRAYSIZE(saved), SettingsPath().c_str());
     const auto resolved = ResolveDiscord(saved);
     SetWindowTextW(g_path, resolved.empty() ? saved : resolved.c_str());
 }
 void Browse() {
-    wchar_t path[32768]{}; wcsncpy_s(path, Text(g_path).c_str(), _TRUNCATE);
+    wchar_t path[MAX_PATH]{}; wcsncpy_s(path, Text(g_path).c_str(), _TRUNCATE);
     OPENFILENAMEW dialog{sizeof(dialog)};
     dialog.hwndOwner = g_window; dialog.lpstrFilter = L"Discord.exe\0Discord.exe\0Executables\0*.exe\0";
     dialog.lpstrFile = path; dialog.nMaxFile = ARRAYSIZE(path);
@@ -283,7 +292,8 @@ bool DiscordIsRunning() {
     CloseHandle(snapshot); return found;
 }
 bool LaunchPath(std::filesystem::path target, std::wstring& error) {
-    target = ResolveDiscord(target.wstring());
+    target = ResolveDiscord(target);
+    if (g_path && !target.empty()) SetWindowTextW(g_path, target.c_str());
     if (!std::filesystem::is_regular_file(target) || _wcsicmp(target.filename().c_str(), L"Discord.exe")) {
         return Fail(error, L"Select Discord.exe.");
     }
@@ -296,30 +306,38 @@ bool LaunchPath(std::filesystem::path target, std::wstring& error) {
     int bytes = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, hook.c_str(), -1, nullptr, 0, nullptr, nullptr);
     std::string ansi(static_cast<size_t>(bytes), '\0');
     WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, hook.c_str(), -1, ansi.data(), bytes, nullptr, &substituted);
-    if (substituted) return Fail(error, L"Hook path has unsupported characters.");
+    if (substituted) return Fail(error, L"Filter path has unsupported characters.");
     std::wstring command = L"\"" + target.wstring() + L"\"";
-    const std::wstring eventBase = HookEventBase();
-    if (eventBase.empty()) return Fail(error, L"Couldn't initialize hook verification.");
-    HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, (eventBase + L".Ready").c_str());
-    HANDLE failed = CreateEventW(nullptr, TRUE, FALSE, (eventBase + L".Failed").c_str());
+    const std::wstring eventBase = LaunchEventBase();
+    if (eventBase.empty()) return Fail(error, L"Couldn't initialize launch verification.");
+    wchar_t readyName[128]{}, failedName[128]{};
+    if (swprintf_s(readyName, L"%s.Ready", eventBase.c_str()) < 0 ||
+        swprintf_s(failedName, L"%s.Failed", eventBase.c_str()) < 0)
+        return Fail(error, L"Couldn't initialize launch verification.");
+    HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, readyName);
+    HANDLE failed = CreateEventW(nullptr, TRUE, FALSE, failedName);
     if (!ready || !failed) {
         if (ready) CloseHandle(ready);
         if (failed) CloseHandle(failed);
-        return Fail(error, L"Couldn't initialize hook verification.");
+        return Fail(error, L"Couldn't initialize launch verification.");
     }
-    EnvironmentValue statusEvent(kHookStatusVariable, eventBase);
+    EnvironmentValue statusEvent(kLaunchStatusVariable, eventBase);
     if (!statusEvent.Set()) {
         CloseHandle(ready); CloseHandle(failed);
-        return Fail(error, L"Couldn't initialize hook verification.");
+        return Fail(error, L"Couldn't initialize launch verification.");
     }
-    STARTUPINFOW startup{sizeof(startup)}; PROCESS_INFORMATION process{};
+    STARTUPINFOW startup{sizeof(startup)};
+    startup.dwFlags = STARTF_USESHOWWINDOW;
+    startup.wShowWindow = SW_SHOWNORMAL;
+    PROCESS_INFORMATION process{};
     if (!DetourCreateProcessWithDllExW(target.c_str(), command.data(), nullptr, nullptr, FALSE, 0,
             nullptr, target.parent_path().c_str(), &startup, &process, ansi.c_str(), CreateProcessW)) {
         CloseHandle(ready); CloseHandle(failed);
         return Fail(error, L"Launch failed: " + ErrorText(GetLastError()));
     }
     HANDLE waits[]{ready, failed, process.hProcess};
-    const DWORD wait = WaitForMultipleObjects(ARRAYSIZE(waits), waits, FALSE, 10000);
+    const DWORD wait = WaitForMultipleObjects(
+        ARRAYSIZE(waits), waits, FALSE, kHookVerificationTimeoutMs);
     const bool verified = wait == WAIT_OBJECT_0;
     if (!verified && WaitForSingleObject(process.hProcess, 0) == WAIT_TIMEOUT)
         TerminateProcess(process.hProcess, ERROR_DLL_INIT_FAILED);
@@ -327,18 +345,16 @@ bool LaunchPath(std::filesystem::path target, std::wstring& error) {
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
     if (!verified) {
         const std::wstring message = wait == WAIT_OBJECT_0 + 1
-            ? L"The privacy hook could not be installed."
+            ? L"The privacy filter could not be installed."
             : wait == WAIT_OBJECT_0 + 2
-                ? L"Discord exited before the privacy hook was installed."
-                : L"Timed out while verifying the privacy hook.";
+                ? L"Discord exited before the privacy filter was installed."
+                : L"Timed out while verifying the privacy filter.";
         return Fail(error, message);
     }
     return true;
 }
 bool Launch(std::wstring& error) {
-    std::filesystem::path target = ResolveDiscord(Text(g_path));
-    if (!target.empty()) SetWindowTextW(g_path, target.c_str());
-    if (!LaunchPath(target, error)) return false;
+    if (!LaunchPath(Text(g_path), error)) return false;
     Save(); return true;
 }
 HWND Control(const wchar_t* type, const wchar_t* text, DWORD style, int x, int y, int w, int h, int id, DWORD extra = 0) {
