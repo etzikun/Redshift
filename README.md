@@ -1,4 +1,5 @@
 # Redshift
+
 Redshift is a very narrow-scope sandbox that filters Discord's view of process
 names, such as those used for game detection.
 
@@ -13,10 +14,8 @@ offer a way to stop the client from reading process names locally. Redshift
 exists only in lieu of that option, on the machine you already control. The
 same kind of limit is often applied by running the desktop client in a sandbox
 such as Sandboxie, which also loads a DLL into the client to restrict what it
-can see. Redshift is a very narrow-scope sandbox for that one case: it filters
-Discord's view of process names only. It does not isolate files, devices, the
-network, windows, or other system resources. It is not a Discord product. This
-is the project's sole purpose.
+can see. Redshift applies that approach only to process-name enumeration. It is
+not a Discord product.
 
 ## Liability
 
@@ -31,13 +30,12 @@ Prebuilt files are found in `Redshift-1.0.zip`. Keep them together:
 - `Redshift.exe`
 - `RedshiftPrivacyHook.dll`
 
-These binaries are not Authenticode-signed. Windows SmartScreen should show
+These binaries are not Authenticode-signed. Windows SmartScreen may show
 **Windows protected your PC**. If you trust this build, use
 **More info** and **Run anyway**. Do not turn SmartScreen off.
 
-Windows 11 **Smart App Control** can block unsigned software outright.
-Allow this app only if you choose to run it, or build from
-source. Do not disable Smart App Control or other security software.
+Windows 11 **Smart App Control** may block unsigned software and does not offer
+per-app exceptions. Do not disable it solely to run Redshift.
 
 Quit Discord completely before launching it through Redshift. An existing
 Discord instance cannot be retroactively protected.
@@ -52,26 +50,17 @@ path is stored locally in `%LOCALAPPDATA%\Redshift\settings.ini`.
 
 ### Desktop shortcut
 
-To create a normal shortcut, right-click `Redshift.exe`, select **Show more
-options**, then **Send to > Desktop (create shortcut)**.
-
-For one-click protected launch, first select Discord in Redshift and copy the
-displayed path. Open the shortcut's **Properties** and append the following to
-its **Target**, replacing the example with that path:
-
-```text
- --launch "C:\Users\you\AppData\Local\Discord\app-1.0.0000\Discord.exe"
-```
-
-Keep the existing quoted path to `Redshift.exe` before these arguments. The
-complete Target should resemble:
+Right-click `Redshift.exe` and select **Show more options > Send to > Desktop
+(create shortcut)**. For one-click protected launch, append `--launch` and the
+Discord path shown in Redshift to the shortcut's **Target**:
 
 ```text
 "C:\Tools\Redshift\Redshift.exe" --launch "C:\Users\you\AppData\Local\Discord\app-1.0.0000\Discord.exe"
 ```
 
-The Discord path in the shortcut is resolved to the newest installed version
-when it is used. Recreate or update the shortcut if `Redshift.exe` is moved.
+The shortcut keeps this manual path unchanged. Redshift resolves it internally
+to the newest installed Discord version each time it launches. Update the
+shortcut only if `Redshift.exe` is moved.
 
 Explicit launch errors are appended to
 `%LOCALAPPDATA%\Redshift\launch.log`. Successful launches are not logged, and
@@ -91,9 +80,9 @@ normally.
 
 ## Security
 
-This is a very narrow-scope sandbox: process names only. Discord retains its
-normal access to files, devices, the network, windows, and other user resources.
-The Discord client can also detect the loaded DLL (as such, use at your own risk).
+Redshift is not a security boundary. Discord retains its normal access to files,
+devices, the network, windows, and other user resources, and it can detect the
+loaded DLL.
 
 The hook is local to Discord instances started by Redshift. It does not hide
 windows, files, services, drivers or network activity.
