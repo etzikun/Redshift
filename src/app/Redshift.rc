@@ -1,0 +1,34 @@
+#include "resource.h"
+#include "version.h"
+#include <winver.h>
+#include <winuser.h>
+
+IDI_REDSHIFT ICON "../Redshift.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION REDSHIFT_VERSION_MAJOR,REDSHIFT_VERSION_MINOR,REDSHIFT_VERSION_PATCH,REDSHIFT_VERSION_BUILD
+PRODUCTVERSION REDSHIFT_VERSION_MAJOR,REDSHIFT_VERSION_MINOR,REDSHIFT_VERSION_PATCH,REDSHIFT_VERSION_BUILD
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Redshift"
+            VALUE "FileDescription", "Redshift"
+            VALUE "FileVersion", REDSHIFT_VERSION_STRING
+            VALUE "InternalName", "Redshift"
+            VALUE "OriginalFilename", "Redshift.exe"
+            VALUE "ProductName", "Redshift"
+            VALUE "ProductVersion", REDSHIFT_VERSION_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
