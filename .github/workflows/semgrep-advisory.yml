@@ -30,10 +30,17 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install pinned Semgrep engine
+      - name: Install current Semgrep engine
+        shell: bash
         run: |
-          python -m pip install --disable-pip-version-check semgrep==1.172.0
-          semgrep --version
+          python -m pip install \
+            --disable-pip-version-check \
+            --upgrade semgrep
+
+          SEMGREP_VERSION="$(semgrep --version)"
+
+          echo "SEMGREP_VERSION=$SEMGREP_VERSION" >> "$GITHUB_ENV"
+          echo "Installed Semgrep: $SEMGREP_VERSION"
 
       - name: Fetch current upstream Semgrep rules
         shell: bash
@@ -54,47 +61,58 @@ jobs:
             echo "### Semgrep advisory scan provenance"
             echo ""
             echo "- **Redshift commit:** \`$GITHUB_SHA\`"
-            echo "- **Semgrep engine:** \`$(semgrep --version)\`"
+            echo "- **Semgrep engine:** \`$SEMGREP_VERSION\`"
             echo "- **Rules repository:** \`semgrep/semgrep-rules\`"
             echo "- **Rules branch:** \`$RULES_BRANCH\`"
             echo "- **Rules commit:** \`$RULES_SHA\`"
+            echo "- **Rules scope:** \`c/lang/security\`"
             echo ""
-            echo "The upstream rules are intentionally fetched fresh for each scan."
-            echo "Findings are advisory and do not constitute a security certification."
+            echo "The Semgrep engine and upstream rules are intentionally"
+            echo "kept current so future scanner improvements can discover"
+            echo "issues in unchanged Redshift source."
+            echo ""
+            echo "Findings are advisory only and do not constitute a"
+            echo "security certification."
           } >> "$GITHUB_STEP_SUMMARY"
 
           {
             echo "Redshift commit: $GITHUB_SHA"
-            echo "Semgrep engine: $(semgrep --version)"
+            echo "Semgrep engine: $SEMGREP_VERSION"
             echo "Rules repository: https://github.com/semgrep/semgrep-rules"
             echo "Rules branch: $RULES_BRANCH"
             echo "Rules commit: $RULES_SHA"
+            echo "Rules scope: c/lang/security"
           } > "$GITHUB_WORKSPACE/semgrep-provenance.txt"
- 
+
       - name: Run advisory Semgrep scan
         shell: bash
         run: |
+          set -o pipefail
+
           semgrep scan \
             --metrics=off \
-            --config "$RUNNER_TEMP/semgrep-rules" \
+            --config "$RUNNER_TEMP/semgrep-rules/c/lang/security" \
             --json \
             --output semgrep-results.json \
-            .
+            . 2>&1 | tee semgrep-scan.log
 
       - name: Print advisory findings
+        if: success()
         shell: bash
         run: |
           semgrep scan \
             --metrics=off \
-            --config "$RUNNER_TEMP/semgrep-rules" \
+            --config "$RUNNER_TEMP/semgrep-rules/c/lang/security" \
             .
 
       - name: Upload advisory results
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: semgrep-advisory-${{ github.sha }}
           path: |
             semgrep-results.json
             semgrep-provenance.txt
+            semgrep-scan.log
           retention-days: 90
-          if-no-files-found: error
+          if-no-files-found: warn
