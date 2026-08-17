@@ -40,24 +40,31 @@ Discord instance cannot be protected.
 
 Discord installs updates into versioned `app-*` directories. A saved path is
 resolved to the newest installed `Discord.exe` before each launch. The selected
-path is stored locally in `%LOCALAPPDATA%\Redshift\settings.ini`.
+path and the Light/Dark theme choice are stored locally in
+`%LOCALAPPDATA%\Redshift\settings.ini`.
 
 ### Desktop shortcut
 
 Right-click `Redshift.exe` and select **Show more options > Send to > Desktop
-(create shortcut)**. For one-click protected launch, append `--launch` and the
-Discord path shown in Redshift to the shortcut's **Target** like in the example below:
+(create shortcut)**. Open the shortcut's **Properties** and append `--launch`
+to **Target**:
 
 ```text
-"C:\Tools\Redshift\Redshift.exe" --launch "C:\Users\you\AppData\Local\Discord\app-1.0.0000\Discord.exe"
+"C:\Tools\Redshift\Redshift.exe" --launch
 ```
 
-The shortcut keeps this manual path unchanged so will break on update. Launching Redshift resolves it internally
-to the newest installed Discord version each time it launches. Update the
-shortcut only if `Redshift.exe` is moved or Discord version changes.
+This quick-start mode uses the saved Discord location, resolves the newest
+installed version automatically, and exits after a verified launch. Redshift
+does not show a window on success. If the launch fails, its normal window opens
+and displays the error.
+
+If no location has been saved, Redshift checks Discord's normal install
+location. The older `--launch "path\to\Discord.exe"` form is also supported.
+The shortcut only needs updating if `Redshift.exe` is moved.
 
 Explicit launch errors are appended to `%LOCALAPPDATA%\Redshift\launch.log`.
-Redshift does not transmit any data, it runs entirely locally.
+Successful launches are not logged. Redshift runs entirely locally and does not
+transmit data.
 
 ## How it works
 
