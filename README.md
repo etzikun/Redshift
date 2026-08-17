@@ -78,21 +78,6 @@ The DLL also intercepts `CreateProcessW` so Discord and its updater pass the sam
 filter to later Discord child processes. Other child applications are started
 normally.
 
-### Advisory static analysis
-
-Redshift is periodically scanned against the current upstream
-[Semgrep Community Edition rules](https://github.com/semgrep/semgrep-rules).
-
-These scans are informational only. They are not a security certification
-and are not used as a release gate.
-
-Redshift does not maintain or suppress the upstream rule set used by this
-workflow. Each scan fetches the current upstream rules and records the exact
-Semgrep rules commit, Redshift commit, and Semgrep engine version used.
-
-Findings are published for awareness and independent review. A clean scan
-should not be interpreted as proof that Redshift is safe.
-
 ## Security
 
 Endpoint protection may flag DLL injection even when the software is legitimate.
@@ -110,6 +95,21 @@ loaded DLL.
 
 The hook is local to Discord instances started by Redshift. It does not hide
 windows, files, services, drivers or network activity.
+
+### Advisory static analysis
+
+Redshift is periodically scanned against the current upstream
+[Semgrep Community Edition rules](https://github.com/semgrep/semgrep-rules).
+
+These scans are informational only. They are not a security certification
+and are not used as a release gate.
+
+Redshift does not maintain or suppress the upstream rule set used by this
+workflow. Each scan fetches the current upstream rules and records the exact
+Semgrep rules commit, Redshift commit, and Semgrep engine version used.
+
+Findings are published for awareness and independent review. A clean scan
+should not be interpreted as proof that Redshift is safe.
 
 ## Build
 
