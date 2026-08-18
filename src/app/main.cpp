@@ -374,7 +374,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 }
 }
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
+int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
+                    _In_ PWSTR, _In_ int show) {
     int argumentCount{};
     bool quickLaunchFailed = false;
     LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);

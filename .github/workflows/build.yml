@@ -19,12 +19,12 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
       - name: Configure
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DREDSHIFT_ENABLE_CODE_ANALYSIS=ON
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -42,3 +42,27 @@ jobs:
               throw "Missing release output: $path"
             }
           }
+
+  detours-provenance:
+    name: Detours provenance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Validate retained files and hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          awk -F'`' '/^\| `/{print "third_party/detours/" $2}' \
+            third_party/detours/PROVENANCE.md | sort > "$RUNNER_TEMP/expected-files"
+          find third_party/detours -type f ! -name PROVENANCE.md | sort \
+            > "$RUNNER_TEMP/actual-files"
+          diff -u "$RUNNER_TEMP/expected-files" "$RUNNER_TEMP/actual-files"
+
+          awk -F'`' '/^\| `/{print $4 "  third_party/detours/" $2}' \
+            third_party/detours/PROVENANCE.md | sha256sum --check --strict -

@@ -106,15 +106,14 @@ loaded DLL.
 
 ### Advisory static analysis
 
-Redshift is periodically scanned against the current upstream
+Redshift is periodically scanned with pinned versions of the Semgrep engine and
 [Semgrep Community Edition rules](https://github.com/semgrep/semgrep-rules).
 
 These scans are informational only. They are not a security certification
 and are not used as a release gate.
 
-Redshift does not maintain or suppress the upstream rule set used by this
-workflow. Each scan fetches the current upstream rules and records the exact
-Semgrep rules commit, Redshift commit, and Semgrep engine version used.
+Engine and rules updates are made through reviewed pull requests. Each scan
+records the exact Semgrep rules commit, Redshift commit, and engine version used.
 
 Findings are published for awareness and independent review. A clean scan
 should not be interpreted as proof that Redshift is safe.
@@ -122,9 +121,11 @@ should not be interpreted as proof that Redshift is safe.
 ## Build
 
 Microsoft Detours 4.0.1 is vendored under `third_party/detours` under the MIT
-license. A Release build produces `Redshift.exe` and
+license; its retained-file hashes are recorded in
+`third_party/detours/PROVENANCE.md`. A Release build produces `Redshift.exe` and
 `RedshiftPrivacyHook.dll`. The hook also links the Windows SDK import library
 `ntdll.lib` for `NtQuerySystemInformation`; Windows supplies `ntdll.dll`.
+CI checks the vendored file set and hashes against that provenance record.
 Build requirements:
 
 - Windows 11, x64

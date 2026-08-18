@@ -23,39 +23,44 @@ jobs:
 
     steps:
       - name: Check out Redshift
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: .github/requirements-semgrep.txt
 
-      - name: Install current Semgrep engine
+      - name: Load pinned rules revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .github/semgrep-rules.env
+          [[ "$SEMGREP_RULES_SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "SEMGREP_RULES_SHA=$SEMGREP_RULES_SHA" >> "$GITHUB_ENV"
+
+      - name: Install pinned Semgrep engine
         shell: bash
         run: |
           python -m pip install \
             --disable-pip-version-check \
-            --upgrade semgrep
+            --requirement .github/requirements-semgrep.txt
+          echo "SEMGREP_VERSION=$(semgrep --version)" >> "$GITHUB_ENV"
 
-          SEMGREP_VERSION="$(semgrep --version)"
-
-          echo "SEMGREP_VERSION=$SEMGREP_VERSION" >> "$GITHUB_ENV"
-          echo "Installed Semgrep: $SEMGREP_VERSION"
-
-      - name: Fetch current upstream Semgrep rules
+      - name: Fetch pinned Semgrep rules
         shell: bash
         run: |
-          git clone --depth 1 \
-            https://github.com/semgrep/semgrep-rules.git \
-            "$RUNNER_TEMP/semgrep-rules"
-
-          cd "$RUNNER_TEMP/semgrep-rules"
-
-          RULES_BRANCH="$(git branch --show-current)"
-          RULES_SHA="$(git rev-parse HEAD)"
-
-          echo "SEMGREP_RULES_BRANCH=$RULES_BRANCH" >> "$GITHUB_ENV"
-          echo "SEMGREP_RULES_SHA=$RULES_SHA" >> "$GITHUB_ENV"
+          set -euo pipefail
+          RULES_DIR="$RUNNER_TEMP/semgrep-rules"
+          git init "$RULES_DIR"
+          git -C "$RULES_DIR" remote add origin \
+            https://github.com/semgrep/semgrep-rules.git
+          git -C "$RULES_DIR" fetch --depth 1 origin "$SEMGREP_RULES_SHA"
+          git -C "$RULES_DIR" checkout --detach FETCH_HEAD
+          test "$(git -C "$RULES_DIR" rev-parse HEAD)" = "$SEMGREP_RULES_SHA"
 
           {
             echo "### Semgrep advisory scan provenance"
@@ -63,24 +68,15 @@ jobs:
             echo "- **Redshift commit:** \`$GITHUB_SHA\`"
             echo "- **Semgrep engine:** \`$SEMGREP_VERSION\`"
             echo "- **Rules repository:** \`semgrep/semgrep-rules\`"
-            echo "- **Rules branch:** \`$RULES_BRANCH\`"
-            echo "- **Rules commit:** \`$RULES_SHA\`"
+            echo "- **Rules commit:** \`$SEMGREP_RULES_SHA\`"
             echo "- **Rules scope:** \`c/lang/security\`"
-            echo ""
-            echo "The Semgrep engine and upstream rules are intentionally"
-            echo "kept current so future scanner improvements can discover"
-            echo "issues in unchanged Redshift source."
-            echo ""
-            echo "Findings are advisory only and do not constitute a"
-            echo "security certification."
           } >> "$GITHUB_STEP_SUMMARY"
 
           {
             echo "Redshift commit: $GITHUB_SHA"
             echo "Semgrep engine: $SEMGREP_VERSION"
             echo "Rules repository: https://github.com/semgrep/semgrep-rules"
-            echo "Rules branch: $RULES_BRANCH"
-            echo "Rules commit: $RULES_SHA"
+            echo "Rules commit: $SEMGREP_RULES_SHA"
             echo "Rules scope: c/lang/security"
           } > "$GITHUB_WORKSPACE/semgrep-provenance.txt"
 
@@ -88,7 +84,6 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-
           semgrep scan \
             --metrics=off \
             --config "$RUNNER_TEMP/semgrep-rules/c/lang/security" \
@@ -107,7 +102,7 @@ jobs:
 
       - name: Upload advisory results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: semgrep-advisory-${{ github.sha }}
           path: |
@@ -116,4 +111,3 @@ jobs:
             semgrep-scan.log
           retention-days: 90
           if-no-files-found: warn
-          

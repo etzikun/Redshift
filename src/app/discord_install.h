@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 inline bool ParseAppFolder(const std::wstring& name, int parts[3]) {
     if (name.size() < 5 || _wcsnicmp(name.c_str(), L"app-", 4) != 0) return false;
@@ -61,9 +62,11 @@ inline std::filesystem::path DiscordInstallRoot(const std::filesystem::path& exe
 }
 
 inline std::filesystem::path DefaultDiscordRoot() {
-    wchar_t local[32768]{};
-    GetEnvironmentVariableW(L"LOCALAPPDATA", local, ARRAYSIZE(local));
-    return *local ? std::filesystem::path(local) / L"Discord" : std::filesystem::path();
+    std::vector<wchar_t> local(32768);
+    const DWORD length = GetEnvironmentVariableW(
+        L"LOCALAPPDATA", local.data(), static_cast<DWORD>(local.size()));
+    if (length == 0 || length >= local.size()) return {};
+    return std::filesystem::path(local.data()) / L"Discord";
 }
 
 inline std::filesystem::path ResolveDiscord(const std::filesystem::path& selected) {
