@@ -1,5 +1,6 @@
 #include "resource.h"
 #include "discord_install.h"
+#include "privacy_policy.h"
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
@@ -7,33 +8,21 @@
 #include <dwmapi.h>
 #include <objbase.h>
 #include <shellapi.h>
-#include <softpub.h>
 #include <tlhelp32.h>
-#include <uxtheme.h>
-#include <winreg.h>
-#include <wintrust.h>
 #include <filesystem>
 #include <string>
 
 namespace {
 constexpr wchar_t kClass[] = L"RedshiftWindow";
 constexpr wchar_t kTitle[] = L"Redshift";
+constexpr wchar_t kDiscordRootVariable[] = L"REDSHIFT_DISCORD_ROOT";
 constexpr wchar_t kLaunchStatusVariable[] = L"REDSHIFT_LAUNCH_STATUS";
 constexpr DWORD kHookVerificationTimeoutMs = 30000;
-enum { IdPath = 1001, IdBrowse, IdLaunch, IdLog, IdStatus, IdHint };
+enum { IdPath = 1001, IdBrowse, IdLaunch, IdStatus, IdHint, IdTheme };
 HINSTANCE g_instance{};
-HWND g_window{}, g_path{}, g_status{}, g_hint{};
+HWND g_window{}, g_path{}, g_status{}, g_hint{}, g_themeChoice{};
 HFONT g_font{}, g_titleFont{};
-
-#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
-#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
-#endif
-
-struct {
-    int (WINAPI* setPreferredAppMode)(int);
-    BOOL (WINAPI* allowDarkForWindow)(HWND, BOOL);
-    void (WINAPI* flushMenuThemes)();
-} g_dark{};
+std::wstring g_startupError;
 
 struct {
     bool dark{};
@@ -45,18 +34,6 @@ struct {
     HBRUSH editBrush{};
 } g_theme{};
 
-bool HighContrastOn() {
-    HIGHCONTRASTW contrast{sizeof(contrast)};
-    return SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
-        (contrast.dwFlags & HCF_HIGHCONTRASTON);
-}
-bool AppsUseLightTheme() {
-    DWORD value = 1, size = sizeof(value);
-    const LSTATUS status = RegGetValueW(HKEY_CURRENT_USER,
-        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-        L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size);
-    return status != ERROR_SUCCESS || value != 0;
-}
 void DestroyThemeBrushes() {
     if (g_theme.windowBrush) DeleteObject(g_theme.windowBrush);
     if (g_theme.editBrush) DeleteObject(g_theme.editBrush);
@@ -64,8 +41,6 @@ void DestroyThemeBrushes() {
 }
 void LoadTheme() {
     DestroyThemeBrushes();
-    const bool highContrast = HighContrastOn();
-    g_theme.dark = !highContrast && !AppsUseLightTheme();
     if (g_theme.dark) {
         g_theme.window = RGB(32, 32, 32);
         g_theme.text = RGB(250, 250, 250);
@@ -74,38 +49,15 @@ void LoadTheme() {
     } else {
         g_theme.window = GetSysColor(COLOR_WINDOW);
         g_theme.text = GetSysColor(COLOR_WINDOWTEXT);
-        g_theme.hint = highContrast ? GetSysColor(COLOR_GRAYTEXT) : RGB(96, 96, 96);
+        g_theme.hint = RGB(96, 96, 96);
         g_theme.edit = GetSysColor(COLOR_WINDOW);
     }
     g_theme.windowBrush = CreateSolidBrush(g_theme.window);
     g_theme.editBrush = CreateSolidBrush(g_theme.edit);
 }
-void InitDarkModeSupport() {
-    HMODULE uxtheme = LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!uxtheme) return;
-    g_dark.setPreferredAppMode =
-        reinterpret_cast<int (WINAPI*)(int)>(GetProcAddress(uxtheme, MAKEINTRESOURCEA(135)));
-    g_dark.allowDarkForWindow =
-        reinterpret_cast<BOOL (WINAPI*)(HWND, BOOL)>(GetProcAddress(uxtheme, MAKEINTRESOURCEA(133)));
-    g_dark.flushMenuThemes =
-        reinterpret_cast<void (WINAPI*)()>(GetProcAddress(uxtheme, MAKEINTRESOURCEA(136)));
-    if (g_dark.setPreferredAppMode) g_dark.setPreferredAppMode(1);
-    if (g_dark.flushMenuThemes) g_dark.flushMenuThemes();
-}
 void ApplyChrome(HWND window) {
     BOOL dark = g_theme.dark ? TRUE : FALSE;
-    if (FAILED(DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark))))
-        DwmSetWindowAttribute(window, 19, &dark, sizeof(dark));
-    if (g_dark.allowDarkForWindow) g_dark.allowDarkForWindow(window, dark);
-}
-void ApplyControlTheme(HWND control) {
-    if (g_dark.allowDarkForWindow) g_dark.allowDarkForWindow(control, g_theme.dark ? TRUE : FALSE);
-    wchar_t name[32]{};
-    GetClassNameW(control, name, ARRAYSIZE(name));
-    const wchar_t* theme = nullptr;
-    if (g_theme.dark)
-        theme = _wcsicmp(name, L"Edit") == 0 ? L"DarkMode_CFD" : L"DarkMode_Explorer";
-    SetWindowTheme(control, theme, nullptr);
+    DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
 }
 void ApplyThemeToWindow() {
     static bool applying{};
@@ -117,9 +69,6 @@ void ApplyThemeToWindow() {
         return;
     }
     ApplyChrome(g_window);
-    for (HWND child = GetWindow(g_window, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
-        ApplyControlTheme(child);
-    if (g_dark.flushMenuThemes) g_dark.flushMenuThemes();
     InvalidateRect(g_window, nullptr, TRUE);
     applying = false;
 }
@@ -145,7 +94,16 @@ void DestroyFonts() {
     g_font = g_titleFont = nullptr;
 }
 
-const std::filesystem::path& DataDir() {
+const std::filesystem::path& ModuleDir() {
+    static const std::filesystem::path path = [] {
+        wchar_t value[MAX_PATH]{};
+        const DWORD length = GetModuleFileNameW(nullptr, value, ARRAYSIZE(value));
+        return length && length < ARRAYSIZE(value)
+            ? std::filesystem::path(value).parent_path() : std::filesystem::path();
+    }();
+    return path;
+}
+const std::filesystem::path& EnsureDataDirectory() {
     static const std::filesystem::path path = [] {
         wchar_t value[MAX_PATH]{};
         const DWORD size = GetEnvironmentVariableW(L"LOCALAPPDATA", value, ARRAYSIZE(value));
@@ -153,14 +111,20 @@ const std::filesystem::path& DataDir() {
             ? std::filesystem::path(value) / L"Redshift"
             : std::filesystem::temp_directory_path() / L"Redshift";
         std::error_code error;
+        // SIDE EFFECT: ensure the local settings/log directory exists.
         std::filesystem::create_directories(dir, error);
         return dir;
     }();
     return path;
 }
-std::filesystem::path SettingsPath() { return DataDir() / L"settings.ini"; }
-std::filesystem::path LogPath() { return DataDir() / L"launch.log"; }
-
+std::filesystem::path SettingsPath() { return EnsureDataDirectory() / L"settings.ini"; }
+std::filesystem::path LogPath() { return EnsureDataDirectory() / L"launch.log"; }
+void LoadThemePreference() {
+    wchar_t value[16]{};
+    GetPrivateProfileStringW(L"appearance", L"theme", L"light", value, ARRAYSIZE(value),
+        SettingsPath().c_str());
+    g_theme.dark = _wcsicmp(value, L"dark") == 0;
+}
 std::wstring Text(HWND control) {
     int length = GetWindowTextLengthW(control);
     std::wstring value(static_cast<size_t>(length) + 1, L'\0');
@@ -178,34 +142,9 @@ std::wstring ErrorText(DWORD code) {
     while (!text.empty() && (text.back() == L'\r' || text.back() == L'\n')) text.pop_back();
     return text;
 }
-const std::filesystem::path& ModuleDir() {
-    static const std::filesystem::path path = [] {
-        wchar_t value[MAX_PATH]{};
-        const DWORD length = GetModuleFileNameW(nullptr, value, ARRAYSIZE(value));
-        return length && length < ARRAYSIZE(value)
-            ? std::filesystem::path(value).parent_path() : std::filesystem::path();
-    }();
-    return path;
-}
 bool IsX64(const std::filesystem::path& path) {
     DWORD type{};
     return GetBinaryTypeW(path.c_str(), &type) != FALSE && type == SCS_64BIT_BINARY;
-}
-bool HasTrustedSignature(const std::filesystem::path& path) {
-    WINTRUST_FILE_INFO file{sizeof(file)};
-    file.pcwszFilePath = path.c_str();
-    WINTRUST_DATA trust{sizeof(trust)};
-    trust.dwUIChoice = WTD_UI_NONE;
-    trust.fdwRevocationChecks = WTD_REVOKE_NONE;
-    trust.dwUnionChoice = WTD_CHOICE_FILE;
-    trust.pFile = &file;
-    trust.dwStateAction = WTD_STATEACTION_VERIFY;
-    trust.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL;
-    GUID policy = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-    LONG result = WinVerifyTrust(nullptr, &policy, &trust);
-    trust.dwStateAction = WTD_STATEACTION_CLOSE;
-    WinVerifyTrust(nullptr, &policy, &trust);
-    return result == ERROR_SUCCESS;
 }
 std::wstring LaunchEventBase() {
     GUID id{};
@@ -214,35 +153,25 @@ std::wstring LaunchEventBase() {
     if (StringFromGUID2(id, value, ARRAYSIZE(value)) <= 0) return {};
     return L"Local\\Redshift.Launch." + std::wstring(value);
 }
-class EnvironmentValue {
+class ScopedEnvironmentVariableChange {
 public:
-    EnvironmentValue(const wchar_t* name, const std::wstring& value) : name_(name) {
-        const DWORD required = GetEnvironmentVariableW(name_, nullptr, 0);
-        if (required) {
-            previous_.resize(required);
-            const DWORD copied = GetEnvironmentVariableW(name_, previous_.data(), required);
-            if (copied && copied < required) {
-                previous_.resize(copied);
-                hadPrevious_ = true;
-            }
-        } else {
-            hadPrevious_ = GetLastError() != ERROR_ENVVAR_NOT_FOUND;
-        }
+    ScopedEnvironmentVariableChange(const wchar_t* name, const std::wstring& value) : name_(name) {
+        // SIDE EFFECT: set a launch-scoped environment variable.
         set_ = SetEnvironmentVariableW(name_, value.c_str()) != FALSE;
     }
-    ~EnvironmentValue() {
-        if (set_) SetEnvironmentVariableW(name_, hadPrevious_ ? previous_.c_str() : nullptr);
+    ~ScopedEnvironmentVariableChange() {
+        // SIDE EFFECT: clear the launch-scoped environment variable.
+        if (set_) SetEnvironmentVariableW(name_, nullptr);
     }
-    bool Set() const { return set_; }
+    bool WasSet() const { return set_; }
 
 private:
     const wchar_t* name_{};
-    std::wstring previous_;
-    bool hadPrevious_{};
     bool set_{};
 };
-bool Fail(std::wstring& error, const std::wstring& message) {
+bool SetLaunchErrorAndAppendLog(std::wstring& error, const std::wstring& message) {
     error = message;
+    // SIDE EFFECT: append one explicit launch error to launch.log.
     HANDLE log = CreateFileW(LogPath().c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr,
         OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (log != INVALID_HANDLE_VALUE) {
@@ -259,14 +188,22 @@ bool Fail(std::wstring& error, const std::wstring& message) {
     }
     return false;
 }
-void Save() {
-    WritePrivateProfileStringW(L"discord", L"executable", Text(g_path).c_str(), SettingsPath().c_str());
+void WriteSettings() {
+    const auto path = SettingsPath();
+    // SIDE EFFECT: write the complete local settings policy.
+    WritePrivateProfileStringW(L"discord", L"executable", Text(g_path).c_str(), path.c_str());
+    WritePrivateProfileStringW(L"appearance", L"theme", g_theme.dark ? L"dark" : L"light",
+        path.c_str());
 }
-void Load() {
+std::filesystem::path SavedDiscordPath() {
     wchar_t saved[MAX_PATH]{};
     GetPrivateProfileStringW(L"discord", L"executable", L"", saved, ARRAYSIZE(saved), SettingsPath().c_str());
+    return saved;
+}
+void LoadSettingsIntoControls() {
+    const auto saved = SavedDiscordPath();
     const auto resolved = ResolveDiscord(saved);
-    SetWindowTextW(g_path, resolved.empty() ? saved : resolved.c_str());
+    SetWindowTextW(g_path, resolved.empty() ? saved.c_str() : resolved.c_str());
 }
 void Browse() {
     wchar_t path[MAX_PATH]{}; wcsncpy_s(path, Text(g_path).c_str(), _TRUNCATE);
@@ -276,92 +213,93 @@ void Browse() {
     dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (GetOpenFileNameW(&dialog)) SetWindowTextW(g_path, path);
 }
-bool Open(const std::filesystem::path& path) {
-    SHELLEXECUTEINFOW info{sizeof(info)};
-    info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI; info.hwnd = g_window;
-    info.lpVerb = L"open"; info.lpFile = path.c_str(); info.nShow = SW_SHOWNORMAL;
-    return ShellExecuteExW(&info) != FALSE;
-}
 bool DiscordIsRunning() {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) return false;
     PROCESSENTRY32W entry{sizeof(entry)};
     bool found = Process32FirstW(snapshot, &entry) != FALSE;
-    while (found && _wcsicmp(entry.szExeFile, L"Discord.exe") != 0)
+    while (found && !privacy_policy::IsDiscordExecutableName(entry.szExeFile))
         found = Process32NextW(snapshot, &entry) != FALSE;
     CloseHandle(snapshot); return found;
 }
-bool LaunchPath(std::filesystem::path target, std::wstring& error) {
+bool LaunchDiscordWithPrivacyHook(std::filesystem::path target, std::wstring& error) {
     target = ResolveDiscord(target);
     if (g_path && !target.empty()) SetWindowTextW(g_path, target.c_str());
-    if (!std::filesystem::is_regular_file(target) || _wcsicmp(target.filename().c_str(), L"Discord.exe")) {
-        return Fail(error, L"Select Discord.exe.");
+    if (!std::filesystem::is_regular_file(target) ||
+        !privacy_policy::IsDiscordExecutableName(target.native())) {
+        return SetLaunchErrorAndAppendLog(error, L"Select Discord.exe.");
     }
-    if (!IsX64(target)) return Fail(error, L"Not a 64-bit Discord.exe.");
-    if (!HasTrustedSignature(target)) return Fail(error, L"Discord.exe is not signed.");
-    if (DiscordIsRunning()) return Fail(error, L"Quit Discord first.");
+    if (!IsX64(target)) return SetLaunchErrorAndAppendLog(error, L"Not a 64-bit Discord.exe.");
+    const auto discordRoot = target.parent_path().parent_path();
+    const auto expectedRoot = DefaultDiscordRoot();
+    if (!privacy_policy::IsVerifiedDiscordInstallationRoot(
+            discordRoot.native(), expectedRoot.parent_path().native())) {
+        return SetLaunchErrorAndAppendLog(error, L"Discord must be installed under %LOCALAPPDATA%\\Discord.");
+    }
+    if (!privacy_policy::ShouldInjectInto(target.native(), discordRoot.native()))
+        return SetLaunchErrorAndAppendLog(error, L"Discord.exe must be inside an app-X.Y.Z directory.");
+    if (DiscordIsRunning()) return SetLaunchErrorAndAppendLog(error, L"Quit Discord first.");
     auto hook = ModuleDir() / L"RedshiftPrivacyHook.dll";
-    if (!std::filesystem::is_regular_file(hook)) return Fail(error, L"RedshiftPrivacyHook.dll is missing.");
+    if (!std::filesystem::is_regular_file(hook))
+        return SetLaunchErrorAndAppendLog(error, L"RedshiftPrivacyHook.dll is missing.");
     BOOL substituted{};
     int bytes = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, hook.c_str(), -1, nullptr, 0, nullptr, nullptr);
     std::string ansi(static_cast<size_t>(bytes), '\0');
     WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, hook.c_str(), -1, ansi.data(), bytes, nullptr, &substituted);
-    if (substituted) return Fail(error, L"Filter path has unsupported characters.");
+    if (substituted) return SetLaunchErrorAndAppendLog(error, L"Filter path has unsupported characters.");
     std::wstring command = L"\"" + target.wstring() + L"\"";
     const std::wstring eventBase = LaunchEventBase();
-    if (eventBase.empty()) return Fail(error, L"Couldn't initialize launch verification.");
-    wchar_t readyName[128]{}, failedName[128]{};
-    if (swprintf_s(readyName, L"%s.Ready", eventBase.c_str()) < 0 ||
-        swprintf_s(failedName, L"%s.Failed", eventBase.c_str()) < 0)
-        return Fail(error, L"Couldn't initialize launch verification.");
+    if (eventBase.empty())
+        return SetLaunchErrorAndAppendLog(error, L"Couldn't initialize launch verification.");
+    wchar_t readyName[128]{};
+    if (swprintf_s(readyName, L"%s.Ready", eventBase.c_str()) < 0)
+        return SetLaunchErrorAndAppendLog(error, L"Couldn't initialize launch verification.");
+    // SIDE EFFECT: create the named launch-verification event.
     HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, readyName);
-    HANDLE failed = CreateEventW(nullptr, TRUE, FALSE, failedName);
-    if (!ready || !failed) {
-        if (ready) CloseHandle(ready);
-        if (failed) CloseHandle(failed);
-        return Fail(error, L"Couldn't initialize launch verification.");
+    if (!ready) {
+        return SetLaunchErrorAndAppendLog(error, L"Couldn't initialize launch verification.");
     }
-    EnvironmentValue statusEvent(kLaunchStatusVariable, eventBase);
-    if (!statusEvent.Set()) {
-        CloseHandle(ready); CloseHandle(failed);
-        return Fail(error, L"Couldn't initialize launch verification.");
+    ScopedEnvironmentVariableChange statusEvent(kLaunchStatusVariable, eventBase);
+    ScopedEnvironmentVariableChange discordRootValue(kDiscordRootVariable, discordRoot.native());
+    if (!statusEvent.WasSet() || !discordRootValue.WasSet()) {
+        CloseHandle(ready);
+        return SetLaunchErrorAndAppendLog(error, L"Couldn't initialize launch verification.");
     }
     STARTUPINFOW startup{sizeof(startup)};
     startup.dwFlags = STARTF_USESHOWWINDOW;
     startup.wShowWindow = SW_SHOWNORMAL;
     PROCESS_INFORMATION process{};
+    // SIDE EFFECT: launch Discord with RedshiftPrivacyHook.dll injected.
     if (!DetourCreateProcessWithDllExW(target.c_str(), command.data(), nullptr, nullptr, FALSE, 0,
             nullptr, target.parent_path().c_str(), &startup, &process, ansi.c_str(), CreateProcessW)) {
-        CloseHandle(ready); CloseHandle(failed);
-        return Fail(error, L"Launch failed: " + ErrorText(GetLastError()));
+        CloseHandle(ready);
+        return SetLaunchErrorAndAppendLog(error, L"Launch failed: " + ErrorText(GetLastError()));
     }
-    HANDLE waits[]{ready, failed, process.hProcess};
+    HANDLE waits[]{ready, process.hProcess};
     const DWORD wait = WaitForMultipleObjects(
         ARRAYSIZE(waits), waits, FALSE, kHookVerificationTimeoutMs);
     const bool verified = wait == WAIT_OBJECT_0;
+    // SIDE EFFECT: terminate only the child we launched if hook verification failed.
     if (!verified && WaitForSingleObject(process.hProcess, 0) == WAIT_TIMEOUT)
         TerminateProcess(process.hProcess, ERROR_DLL_INIT_FAILED);
-    CloseHandle(ready); CloseHandle(failed);
+    CloseHandle(ready);
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
     if (!verified) {
         const std::wstring message = wait == WAIT_OBJECT_0 + 1
-            ? L"The privacy filter could not be installed."
-            : wait == WAIT_OBJECT_0 + 2
-                ? L"Discord exited before the privacy filter was installed."
-                : L"Timed out while verifying the privacy filter.";
-        return Fail(error, message);
+            ? L"Discord exited before the privacy filter was installed."
+            : L"Timed out while verifying the privacy filter.";
+        return SetLaunchErrorAndAppendLog(error, message);
     }
     return true;
 }
-bool Launch(std::wstring& error) {
-    if (!LaunchPath(Text(g_path), error)) return false;
-    Save(); return true;
+bool LaunchSelectedDiscordWithPrivacyHook(std::wstring& error) {
+    if (!LaunchDiscordWithPrivacyHook(Text(g_path), error)) return false;
+    WriteSettings(); return true;
 }
 HWND Control(const wchar_t* type, const wchar_t* text, DWORD style, int x, int y, int w, int h, int id, DWORD extra = 0) {
     HWND control = CreateWindowExW(extra, type, text, WS_CHILD | WS_VISIBLE | style, x, y, w, h,
         g_window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
     SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
-    ApplyControlTheme(control);
     return control;
 }
 void CreateControls() {
@@ -375,10 +313,16 @@ void CreateControls() {
     g_hint = Control(L"STATIC", L"Quit Discord completely before launching. A running instance cannot be protected.",
         0, 20, 134, 620, 18, IdHint);
     Control(L"BUTTON", L"Launch protected Discord", BS_DEFPUSHBUTTON, 20, 166, 196, 30, IdLaunch);
-    Control(L"BUTTON", L"Open log", BS_PUSHBUTTON, 224, 166, 88, 30, IdLog);
+    Control(L"STATIC", L"Theme", 0, 340, 172, 48, 18, 0);
+    g_themeChoice = Control(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL,
+        390, 168, 112, 160, IdTheme);
+    SendMessageW(g_themeChoice, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Light"));
+    SendMessageW(g_themeChoice, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Dark"));
+    SendMessageW(g_themeChoice, CB_SETCURSEL, g_theme.dark ? 1 : 0, 0);
     g_status = Control(L"STATIC", L"", SS_LEFT | SS_NOPREFIX, 20, 210, 620, 36, IdStatus);
-    Load();
-    if (Text(g_path).empty()) Status(L"Select Discord.exe if it was not detected automatically.");
+    LoadSettingsIntoControls();
+    if (!g_startupError.empty()) Status(g_startupError);
+    else if (Text(g_path).empty()) Status(L"Select Discord.exe if it was not detected automatically.");
     else Status(L"Ready. Quit Discord, then launch.");
 }
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -408,19 +352,22 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         SetBkColor(dc, g_theme.edit);
         return reinterpret_cast<LRESULT>(g_theme.editBrush);
     }
-    case WM_SETTINGCHANGE:
-        if (lParam && _wcsicmp(reinterpret_cast<LPCWSTR>(lParam), L"ImmersiveColorSet") == 0)
-            ApplyThemeToWindow();
-        return DefWindowProcW(window, message, wParam, lParam);
     case WM_THEMECHANGED:
         ApplyThemeToWindow();
         return DefWindowProcW(window, message, wParam, lParam);
     case WM_COMMAND:
         if (LOWORD(wParam) == IdBrowse) Browse();
-        else if (LOWORD(wParam) == IdLaunch) { std::wstring error; Status(Launch(error) ? L"Launched." : error); }
-        else if (LOWORD(wParam) == IdLog) Open(LogPath());
+        else if (LOWORD(wParam) == IdLaunch) {
+            std::wstring error;
+            Status(LaunchSelectedDiscordWithPrivacyHook(error) ? L"Launched." : error);
+        }
+        else if (LOWORD(wParam) == IdTheme && HIWORD(wParam) == CBN_SELCHANGE) {
+            g_theme.dark = SendMessageW(g_themeChoice, CB_GETCURSEL, 0, 0) == 1;
+            WriteSettings();
+            ApplyThemeToWindow();
+        }
         return 0;
-    case WM_CLOSE: Save(); DestroyWindow(window); return 0;
+    case WM_CLOSE: WriteSettings(); DestroyWindow(window); return 0;
     case WM_DESTROY: DestroyFonts(); DestroyThemeBrushes(); PostQuitMessage(0); return 0;
     default: return DefWindowProcW(window, message, wParam, lParam);
     }
@@ -429,21 +376,25 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     int argumentCount{};
+    bool quickLaunchFailed = false;
     LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
-    if (arguments && argumentCount == 3 && _wcsicmp(arguments[1], L"--launch") == 0) {
-        const std::filesystem::path target(arguments[2]);
-        LocalFree(arguments);
-        std::wstring error;
-        if (LaunchPath(target, error)) return 0;
-        MessageBoxW(nullptr, error.c_str(), kTitle, MB_OK | MB_ICONERROR);
-        return 2;
+    if (arguments && (argumentCount == 2 || argumentCount == 3) &&
+        _wcsicmp(arguments[1], L"--launch") == 0) {
+        const std::filesystem::path target = argumentCount == 3
+            ? std::filesystem::path(arguments[2])
+            : SavedDiscordPath();
+        if (LaunchDiscordWithPrivacyHook(target, g_startupError)) {
+            LocalFree(arguments);
+            return 0;
+        }
+        quickLaunchFailed = true;
     }
     if (arguments) LocalFree(arguments);
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\Redshift.SingleInstance");
     if (!mutex) return 1;
     if (GetLastError() == ERROR_ALREADY_EXISTS) { CloseHandle(mutex); return 0; }
     g_instance = instance;
-    InitDarkModeSupport();
+    LoadThemePreference();
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES}; InitCommonControlsEx(&controls);
     WNDCLASSEXW wc{sizeof(wc)}; wc.lpfnWndProc = WindowProc; wc.hInstance = instance;
     wc.hIcon = wc.hIconSm = LoadIconW(instance, MAKEINTRESOURCEW(IDI_REDSHIFT));
@@ -455,7 +406,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     HWND window = CreateWindowExW(0, kClass, kTitle, kWindowStyle, CW_USEDEFAULT, CW_USEDEFAULT,
         area.right - area.left, area.bottom - area.top, nullptr, nullptr, instance, nullptr);
     if (!window) return 1;
-    ShowWindow(window, show); UpdateWindow(window);
+    ShowWindow(window, quickLaunchFailed ? SW_SHOWNORMAL : show); UpdateWindow(window);
     MSG message{}; while (GetMessageW(&message, nullptr, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageW(&message); }
     CloseHandle(mutex); return static_cast<int>(message.wParam);
 }

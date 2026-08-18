@@ -1,30 +1,43 @@
+#include "privacy_policy.h"
 #include <windows.h>
 #include <winternl.h>
 #include <tlhelp32.h>
 #include <detours.h>
 #include <cstdint>
 #include <limits>
-#include <cwchar>
+#include <string_view>
+
+// This DLL intercepts only:
+// - NtQuerySystemInformation(SystemProcessInformation)
+// - Process32FirstW
+// - Process32NextW
+// - CreateProcessW
+// for the purposes of filtering process enumeration and propagating the launch hook to child processes, as outlined in the README.
+// It does not intercept any other APIs.
 
 namespace {
 using QueryFn = NTSTATUS (NTAPI*)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
-QueryFn g_query{};
+QueryFn g_ntQuerySystemInformation = NtQuerySystemInformation;
 using CreateProcessWFn = BOOL (WINAPI*)(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES,
     LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCWSTR, LPSTARTUPINFOW,
     LPPROCESS_INFORMATION);
-CreateProcessWFn g_createProcess = CreateProcessW;
+CreateProcessWFn g_createProcessW = CreateProcessW;
 using Process32Fn = BOOL (WINAPI*)(HANDLE, LPPROCESSENTRY32W);
-Process32Fn g_processFirst{};
-Process32Fn g_processNext{};
+Process32Fn g_process32FirstW = Process32FirstW;
+Process32Fn g_process32NextW = Process32NextW;
 char g_hookPath[MAX_PATH]{};
+constexpr wchar_t kDiscordRootVariable[] = L"REDSHIFT_DISCORD_ROOT";
 constexpr wchar_t kLaunchStatusVariable[] = L"REDSHIFT_LAUNCH_STATUS";
+wchar_t g_verifiedDiscordRoot[MAX_PATH]{};
+bool g_privacyHooksInstalled{};
 
-bool SignalStatus(const wchar_t* suffix) {
+bool SignalLaunchHookStatus(const wchar_t* suffix) {
     wchar_t base[96]{};
     const DWORD length = GetEnvironmentVariableW(kLaunchStatusVariable, base, ARRAYSIZE(base));
     if (!length || length >= ARRAYSIZE(base)) return false;
     wchar_t name[112]{};
     if (wcscpy_s(name, base) || wcscat_s(name, suffix)) return false;
+    // SIDE EFFECT: signal the named launch-verification event.
     HANDLE event = OpenEventW(EVENT_MODIFY_STATE, FALSE, name);
     if (!event) return false;
     const bool signaled = SetEvent(event) != FALSE;
@@ -32,41 +45,29 @@ bool SignalStatus(const wchar_t* suffix) {
     return signaled;
 }
 
-bool StatusRequested() {
+bool IsLaunchHookStatusRequested() {
     wchar_t value[2]{};
     const DWORD length = GetEnvironmentVariableW(kLaunchStatusVariable, value, ARRAYSIZE(value));
     return length != 0 || GetLastError() != ERROR_ENVVAR_NOT_FOUND;
 }
 
-const wchar_t* BaseName(LPCWSTR path) {
-    if (!path || !*path) return L"";
-    const wchar_t* name = path;
-    for (const wchar_t* cursor = path; *cursor; ++cursor)
-        if (*cursor == L'\\' || *cursor == L'/') name = cursor + 1;
-    return name;
+bool LoadVerifiedDiscordInstallationRoot() {
+    wchar_t root[MAX_PATH]{};
+    const DWORD rootLength =
+        GetEnvironmentVariableW(kDiscordRootVariable, root, ARRAYSIZE(root));
+    if (!rootLength || rootLength >= ARRAYSIZE(root)) return false;
+
+    wchar_t localAppData[MAX_PATH]{};
+    const DWORD localLength =
+        GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, ARRAYSIZE(localAppData));
+    if (!localLength || localLength >= ARRAYSIZE(localAppData) ||
+        !privacy_policy::IsVerifiedDiscordInstallationRoot(root, localAppData)) return false;
+    return wcscpy_s(g_verifiedDiscordRoot, root) == 0;
 }
 
-bool ParentNamed(LPCWSTR path, const wchar_t* expected) {
-    const wchar_t* name = BaseName(path);
-    if (!*name || name == path) return false;
-    const wchar_t* end = name;
-    while (end > path && (end[-1] == L'\\' || end[-1] == L'/')) --end;
-    const wchar_t* start = path;
-    for (const wchar_t* cursor = path; cursor < end; ++cursor)
-        if (*cursor == L'\\' || *cursor == L'/') start = cursor + 1;
-    const size_t length = static_cast<size_t>(end - start);
-    return length == wcslen(expected) && _wcsnicmp(start, expected, length) == 0;
-}
-
-bool ShouldInjectPath(LPCWSTR path) {
-    if (_wcsicmp(BaseName(path), L"Discord.exe") == 0) return true;
-    return _wcsicmp(BaseName(path), L"Update.exe") == 0 &&
-        (ParentNamed(path, L"Discord") || ParentNamed(path, L"DiscordPTB") ||
-         ParentNamed(path, L"DiscordCanary"));
-}
-
-bool ShouldInject(LPCWSTR application, LPCWSTR command) {
-    if (ShouldInjectPath(application)) return true;
+bool ShouldInjectIntoCreatedProcess(LPCWSTR application, LPCWSTR command) {
+    if (application &&
+        privacy_policy::ShouldInjectInto(application, g_verifiedDiscordRoot)) return true;
     if (!command) return false;
     while (*command == L' ' || *command == L'\t') ++command;
     bool quoted = *command == L'\"';
@@ -76,89 +77,167 @@ bool ShouldInject(LPCWSTR application, LPCWSTR command) {
     while (*command && count + 1 < ARRAYSIZE(executable) &&
            ((quoted && *command != L'\"') || (!quoted && *command != L' ' && *command != L'\t')))
         executable[count++] = *command++;
-    return ShouldInjectPath(executable);
+    return privacy_policy::ShouldInjectInto(executable, g_verifiedDiscordRoot);
 }
 
-bool KeepImage(const wchar_t* name) {
-    if (!name || !*name) return true;
-    return _wcsicmp(name, L"Discord.exe") == 0;
-}
-
-BOOL WINAPI PrivacyCreateProcessW(LPCWSTR application, LPWSTR command,
+BOOL WINAPI CreateProcessWWithHookPropagation(LPCWSTR application, LPWSTR command,
     LPSECURITY_ATTRIBUTES processAttributes, LPSECURITY_ATTRIBUTES threadAttributes,
     BOOL inheritHandles, DWORD flags, LPVOID environment, LPCWSTR currentDirectory,
     LPSTARTUPINFOW startup, LPPROCESS_INFORMATION process) {
-    if (!ShouldInject(application, command) || !g_hookPath[0])
-        return g_createProcess(application, command, processAttributes, threadAttributes,
+    if (!ShouldInjectIntoCreatedProcess(application, command) || !g_hookPath[0])
+        return g_createProcessW(application, command, processAttributes, threadAttributes,
             inheritHandles, flags, environment, currentDirectory, startup, process);
+    // SIDE EFFECT: propagate RedshiftPrivacyHook.dll to an approved Discord child.
     return DetourCreateProcessWithDllExW(application, command, processAttributes,
         threadAttributes, inheritHandles, flags, environment, currentDirectory, startup,
-        process, g_hookPath, g_createProcess);
+        process, g_hookPath, g_createProcessW);
 }
 
-bool Keep(const SYSTEM_PROCESS_INFORMATION* item) {
-    if (!item->ImageName.Buffer || !item->ImageName.Length) return true;
-    constexpr wchar_t discord[] = L"Discord.exe";
-    return item->ImageName.Length == (ARRAYSIZE(discord) - 1) * sizeof(wchar_t) &&
-        _wcsnicmp(item->ImageName.Buffer, discord, ARRAYSIZE(discord) - 1) == 0;
+std::wstring_view SystemProcessImageName(const SYSTEM_PROCESS_INFORMATION& process) {
+    if (!process.ImageName.Buffer || !process.ImageName.Length) return {};
+    return {process.ImageName.Buffer, process.ImageName.Length / sizeof(wchar_t)};
 }
 
-bool ValidateProcessList(const void* buffer, size_t length) {
-    if (!buffer || length < sizeof(SYSTEM_PROCESS_INFORMATION)) return false;
-    const auto begin = reinterpret_cast<std::uintptr_t>(buffer);
-    if (length > std::numeric_limits<std::uintptr_t>::max() - begin) return false;
-    const auto end = begin + length;
-    auto current = begin;
+bool ValidateSystemProcessInformation(const void* buffer, size_t bufferLength) {
+    if (!buffer || bufferLength < sizeof(SYSTEM_PROCESS_INFORMATION)) return false;
+
+    const auto bufferStart = reinterpret_cast<std::uintptr_t>(buffer);
+    if (bufferLength > (std::numeric_limits<std::uintptr_t>::max)() - bufferStart)
+        return false;
+    const auto bufferEnd = bufferStart + bufferLength;
+    auto entryAddress = bufferStart;
+
     for (;;) {
-        if (current > end - sizeof(SYSTEM_PROCESS_INFORMATION)) return false;
-        const auto* item = reinterpret_cast<const SYSTEM_PROCESS_INFORMATION*>(current);
-        if (item->ImageName.Length) {
-            if (!item->ImageName.Buffer || item->ImageName.Length % sizeof(wchar_t) != 0 ||
-                item->ImageName.MaximumLength < item->ImageName.Length) return false;
-            const auto image = reinterpret_cast<std::uintptr_t>(item->ImageName.Buffer);
-            if (image < begin || image > end || item->ImageName.Length > end - image) return false;
+        const size_t bytesRemaining = static_cast<size_t>(bufferEnd - entryAddress);
+        if (bytesRemaining < sizeof(SYSTEM_PROCESS_INFORMATION)) return false;
+
+        const auto* entry =
+            reinterpret_cast<const SYSTEM_PROCESS_INFORMATION*>(entryAddress);
+        const USHORT imageLength = entry->ImageName.Length;
+        if (imageLength) {
+            if (!entry->ImageName.Buffer || imageLength % sizeof(wchar_t) != 0 ||
+                entry->ImageName.MaximumLength < imageLength) return false;
+
+            const auto imageAddress =
+                reinterpret_cast<std::uintptr_t>(entry->ImageName.Buffer);
+            if (imageAddress < bufferStart || imageAddress > bufferEnd) return false;
+            const size_t imageBytesAvailable =
+                static_cast<size_t>(bufferEnd - imageAddress);
+            if (imageLength > imageBytesAvailable) return false;
         }
-        if (!item->NextEntryOffset) return true;
-        if (item->NextEntryOffset < sizeof(SYSTEM_PROCESS_INFORMATION) ||
-            item->NextEntryOffset > end - current - sizeof(SYSTEM_PROCESS_INFORMATION)) return false;
-        current += item->NextEntryOffset;
+
+        const ULONG nextOffset = entry->NextEntryOffset;
+        if (!nextOffset) return true;
+
+        // Each offset must advance to another complete entry within this buffer.
+        if (nextOffset < sizeof(SYSTEM_PROCESS_INFORMATION)) return false;
+        const size_t maximumNextOffset =
+            bytesRemaining - sizeof(SYSTEM_PROCESS_INFORMATION);
+        if (nextOffset > maximumNextOffset) return false;
+        entryAddress += nextOffset;
     }
 }
 
-NTSTATUS NTAPI PrivacyQuery(SYSTEM_INFORMATION_CLASS type, PVOID buffer,
-                            ULONG length, PULONG returned) {
-    const NTSTATUS status = g_query(type, buffer, length, returned);
+void FilterSystemProcessInformation(void* buffer) {
+    auto* current = static_cast<SYSTEM_PROCESS_INFORMATION*>(buffer);
+
+    // Removing the head would require relocating the buffer and every embedded
+    // image-name pointer. If it is unexpected, leave the validated result alone.
+    if (!privacy_policy::KeepProcessImage(SystemProcessImageName(*current))) return;
+
+    while (current->NextEntryOffset) {
+        const ULONG nextOffset = current->NextEntryOffset;
+        BYTE* const currentAddress = reinterpret_cast<BYTE*>(current);
+        auto* next = reinterpret_cast<SYSTEM_PROCESS_INFORMATION*>(
+            currentAddress + nextOffset);
+
+        if (privacy_policy::KeepProcessImage(SystemProcessImageName(*next))) {
+            current = next;
+            continue;
+        }
+
+        const ULONG followingOffset = next->NextEntryOffset;
+        if (!followingOffset) {
+            current->NextEntryOffset = 0;
+            return;
+        }
+
+        // Skip the hidden entry while retaining the linked-list layout.
+        current->NextEntryOffset = nextOffset + followingOffset;
+    }
+}
+
+NTSTATUS NTAPI FilteredNtQuerySystemInformation(SYSTEM_INFORMATION_CLASS type, PVOID buffer,
+                                                ULONG length, PULONG returned) {
+    const NTSTATUS status = g_ntQuerySystemInformation(type, buffer, length, returned);
     if (status < 0 || type != SystemProcessInformation || !buffer) return status;
     if (returned && *returned > length) return status;
-    const size_t valid = returned ? *returned : length;
-    if (!ValidateProcessList(buffer, valid)) return status;
-    auto* current = static_cast<SYSTEM_PROCESS_INFORMATION*>(buffer);
-    if (!Keep(current)) return status;
-    while (current->NextEntryOffset) {
-        BYTE* const currentBytes = reinterpret_cast<BYTE*>(current);
-        auto* next = reinterpret_cast<SYSTEM_PROCESS_INFORMATION*>(currentBytes + current->NextEntryOffset);
-        if (Keep(next)) {
-            current = next;
-        } else if (!next->NextEntryOffset) {
-            current->NextEntryOffset = 0;
-        } else {
-            current->NextEntryOffset += next->NextEntryOffset;
-        }
-    }
+    const size_t validLength = returned ? *returned : length;
+    if (!ValidateSystemProcessInformation(buffer, validLength)) return status;
+    FilterSystemProcessInformation(buffer);
     return status;
 }
 
-BOOL WINAPI PrivacyProcessNext(HANDLE snapshot, LPPROCESSENTRY32W entry) {
+BOOL WINAPI FilteredProcess32NextW(HANDLE snapshot, LPPROCESSENTRY32W entry) {
     if (!entry) return FALSE;
-    while (g_processNext(snapshot, entry)) {
-        if (KeepImage(entry->szExeFile)) return TRUE;
+    while (g_process32NextW(snapshot, entry)) {
+        if (privacy_policy::KeepProcessImage(entry->szExeFile)) return TRUE;
     }
     return FALSE;
 }
 
-BOOL WINAPI PrivacyProcessFirst(HANDLE snapshot, LPPROCESSENTRY32W entry) {
-    if (!entry || !g_processFirst(snapshot, entry)) return FALSE;
-    return KeepImage(entry->szExeFile) ? TRUE : PrivacyProcessNext(snapshot, entry);
+BOOL WINAPI FilteredProcess32FirstW(HANDLE snapshot, LPPROCESSENTRY32W entry) {
+    if (!entry || !g_process32FirstW(snapshot, entry)) return FALSE;
+    return privacy_policy::KeepProcessImage(entry->szExeFile)
+        ? TRUE : FilteredProcess32NextW(snapshot, entry);
+}
+
+LONG InstallPrivacyHooks() {
+    // SIDE EFFECT: install the complete four-API privacy hook surface.
+    LONG result = DetourTransactionBegin();
+    if (result != NO_ERROR) return result;
+
+    result = DetourUpdateThread(GetCurrentThread());
+    if (result == NO_ERROR)
+        result = DetourAttach(reinterpret_cast<PVOID*>(&g_ntQuerySystemInformation),
+            reinterpret_cast<PVOID>(FilteredNtQuerySystemInformation));
+    if (result == NO_ERROR)
+        result = DetourAttach(reinterpret_cast<PVOID*>(&g_process32FirstW),
+            reinterpret_cast<PVOID>(FilteredProcess32FirstW));
+    if (result == NO_ERROR)
+        result = DetourAttach(reinterpret_cast<PVOID*>(&g_process32NextW),
+            reinterpret_cast<PVOID>(FilteredProcess32NextW));
+    if (result == NO_ERROR)
+        result = DetourAttach(reinterpret_cast<PVOID*>(&g_createProcessW),
+            reinterpret_cast<PVOID>(CreateProcessWWithHookPropagation));
+
+    if (result == NO_ERROR) return DetourTransactionCommit();
+    DetourTransactionAbort();
+    return result;
+}
+
+LONG RemovePrivacyHooks() {
+    // SIDE EFFECT: remove the complete four-API privacy hook surface.
+    LONG result = DetourTransactionBegin();
+    if (result != NO_ERROR) return result;
+
+    result = DetourUpdateThread(GetCurrentThread());
+    if (result == NO_ERROR)
+        result = DetourDetach(reinterpret_cast<PVOID*>(&g_ntQuerySystemInformation),
+            reinterpret_cast<PVOID>(FilteredNtQuerySystemInformation));
+    if (result == NO_ERROR)
+        result = DetourDetach(reinterpret_cast<PVOID*>(&g_process32FirstW),
+            reinterpret_cast<PVOID>(FilteredProcess32FirstW));
+    if (result == NO_ERROR)
+        result = DetourDetach(reinterpret_cast<PVOID*>(&g_process32NextW),
+            reinterpret_cast<PVOID>(FilteredProcess32NextW));
+    if (result == NO_ERROR)
+        result = DetourDetach(reinterpret_cast<PVOID*>(&g_createProcessW),
+            reinterpret_cast<PVOID>(CreateProcessWWithHookPropagation));
+
+    if (result == NO_ERROR) return DetourTransactionCommit();
+    DetourTransactionAbort();
+    return result;
 }
 }
 
@@ -174,43 +253,17 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
                 g_hookPath, ARRAYSIZE(g_hookPath), nullptr, &substituted);
             if (substituted) g_hookPath[0] = '\0';
         }
-        HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-        HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
-        g_query = ntdll ? reinterpret_cast<QueryFn>(GetProcAddress(ntdll, "NtQuerySystemInformation")) : nullptr;
-        g_processFirst = kernel ? reinterpret_cast<Process32Fn>(GetProcAddress(kernel, "Process32FirstW")) : nullptr;
-        g_processNext = kernel ? reinterpret_cast<Process32Fn>(GetProcAddress(kernel, "Process32NextW")) : nullptr;
-        const bool statusRequested = StatusRequested();
-        LONG result = g_query && g_processFirst && g_processNext
-            ? DetourTransactionBegin() : ERROR_PROC_NOT_FOUND;
-        const bool transactionStarted = result == NO_ERROR;
-        if (result == NO_ERROR) result = DetourUpdateThread(GetCurrentThread());
-        if (result == NO_ERROR)
-            result = DetourAttach(reinterpret_cast<PVOID*>(&g_query), reinterpret_cast<PVOID>(PrivacyQuery));
-        if (result == NO_ERROR)
-            result = DetourAttach(reinterpret_cast<PVOID*>(&g_createProcess), reinterpret_cast<PVOID>(PrivacyCreateProcessW));
-        if (result == NO_ERROR)
-            result = DetourAttach(reinterpret_cast<PVOID*>(&g_processFirst), reinterpret_cast<PVOID>(PrivacyProcessFirst));
-        if (result == NO_ERROR)
-            result = DetourAttach(reinterpret_cast<PVOID*>(&g_processNext), reinterpret_cast<PVOID>(PrivacyProcessNext));
-        if (result == NO_ERROR) {
-            result = DetourTransactionCommit();
-        } else if (transactionStarted) {
-            DetourTransactionAbort();
-        }
-        if (result != NO_ERROR || (statusRequested && !SignalStatus(L".Ready"))) {
-            if (statusRequested) SignalStatus(L".Failed");
+        const bool statusRequested = IsLaunchHookStatusRequested();
+        const bool hasVerifiedDiscordRoot = LoadVerifiedDiscordInstallationRoot();
+        LONG result = hasVerifiedDiscordRoot ? InstallPrivacyHooks() : ERROR_INVALID_DATA;
+        g_privacyHooksInstalled = result == NO_ERROR;
+        if (result != NO_ERROR || (statusRequested && !SignalLaunchHookStatus(L".Ready"))) {
+            if (statusRequested) SignalLaunchHookStatus(L".Failed");
             return FALSE;
         }
+        // SIDE EFFECT: stop propagating the one-time launch-status variable.
         if (statusRequested) SetEnvironmentVariableW(kLaunchStatusVariable, nullptr);
-    } else if (reason == DLL_PROCESS_DETACH && g_query && DetourTransactionBegin() == NO_ERROR) {
-        DetourUpdateThread(GetCurrentThread());
-        DetourDetach(reinterpret_cast<PVOID*>(&g_query), reinterpret_cast<PVOID>(PrivacyQuery));
-        DetourDetach(reinterpret_cast<PVOID*>(&g_createProcess), reinterpret_cast<PVOID>(PrivacyCreateProcessW));
-        if (g_processFirst)
-            DetourDetach(reinterpret_cast<PVOID*>(&g_processFirst), reinterpret_cast<PVOID>(PrivacyProcessFirst));
-        if (g_processNext)
-            DetourDetach(reinterpret_cast<PVOID*>(&g_processNext), reinterpret_cast<PVOID>(PrivacyProcessNext));
-        DetourTransactionCommit();
-    }
+    } else if (reason == DLL_PROCESS_DETACH && g_privacyHooksInstalled)
+        RemovePrivacyHooks();
     return TRUE;
 }

@@ -8,13 +8,14 @@ service, or global hook, and it does not modify Discord on disk. It runs without
 administrator privileges. Discord screen sharing and application capture are
 designed to continue working normally.
 
-The Discord desktop client can enumerate other programs on the PC. Discord's activity
-privacy settings control whether that activity is shown to others, but they do not
-offer a way to stop the client from reading process names locally. Redshift
-exists only in lieu of that option, on the machine you already control. The
-same kind of restriction is often applied by running the desktop client in a sandbox
+The Discord desktop client can enumerate other programs on the PC. Discord's
+activity privacy settings control whether that activity is shown to others,
+but they do not stop the client from reading process names locally. Redshift is
+for users who do not want the desktop client to receive unrelated process names
+at all, regardless of how Discord subsequently uses them. The same
+kind of restriction is often applied by running the desktop client in a sandbox
 such as Sandboxie, which also loads a DLL into the client to restrict what it
-can see. Redshift applies that sandbox approach only selectively to process-name enumeration.
+can see. Redshift applies that approach only to process-name enumeration.
 It is not a Discord product and has no affiliation.
 
 ## Liability
@@ -34,6 +35,10 @@ outputs together:
 Quit Discord completely before launching it through Redshift. An already existing
 Discord instance cannot be protected.
 
+Redshift supports the standard Discord installation at
+`%LOCALAPPDATA%\Discord`. The selected executable must be
+`app-X.Y.Z\Discord.exe` under that directory.
+
 1. Run `Redshift.exe`.
 2. Select the installed `Discord.exe` if it was not detected automatically.
 3. Click **Launch protected Discord**.
@@ -42,6 +47,10 @@ Discord installs updates into versioned `app-*` directories. A saved path is
 resolved to the newest installed `Discord.exe` before each launch. The selected
 path and the Light/Dark theme choice are stored locally in
 `%LOCALAPPDATA%\Redshift\settings.ini`.
+
+Explicit launch errors are appended to `%LOCALAPPDATA%\Redshift\launch.log`.
+Successful launches are not logged. Redshift runs entirely locally and does not
+transmit data.
 
 ### Desktop shortcut
 
@@ -62,21 +71,23 @@ If no location has been saved, Redshift checks Discord's normal install
 location. The older `--launch "path\to\Discord.exe"` form is also supported.
 The shortcut only needs updating if `Redshift.exe` is moved.
 
-Explicit launch errors are appended to `%LOCALAPPDATA%\Redshift\launch.log`.
-Successful launches are not logged. Redshift runs entirely locally and does not
-transmit data.
-
 ## How it works
 
 `RedshiftPrivacyHook.dll` uses Microsoft Detours to filter process enumeration
-inside Discord. It covers:
+inside Discord. Process visibility is controlled by a small explicit allow-list.
+The complete intercepted API surface is:
 
 - `NtQuerySystemInformation(SystemProcessInformation)`
 - `Process32FirstW` and `Process32NextW`
+- `CreateProcessW`
 
-The DLL also intercepts `CreateProcessW` so Discord and its updater pass the same
-filter to later Discord child processes. Other child applications are started
-normally.
+`CreateProcessW` propagation is restricted to
+`%LOCALAPPDATA%\Discord\Update.exe` and
+`%LOCALAPPDATA%\Discord\app-X.Y.Z\Discord.exe`. Other child applications are
+started normally.
+
+The native `NtQuerySystemInformation` function is linked normally through the
+Windows SDK's `ntdll.lib`.
 
 ## Security
 
@@ -92,9 +103,6 @@ per-app exceptions. Self-sign only if you trust this source.
 Redshift is not a security boundary. Discord retains its normal access to files,
 devices, the network, windows, and other user resources, and it can detect the
 loaded DLL.
-
-The hook is local to Discord instances started by Redshift. It does not hide
-windows, files, services, drivers or network activity.
 
 ### Advisory static analysis
 
@@ -115,14 +123,15 @@ should not be interpreted as proof that Redshift is safe.
 
 Microsoft Detours 4.0.1 is vendored under `third_party/detours` under the MIT
 license. A Release build produces `Redshift.exe` and
-`RedshiftPrivacyHook.dll`.
+`RedshiftPrivacyHook.dll`. The hook also links the Windows SDK import library
+`ntdll.lib` for `NtQuerySystemInformation`; Windows supplies `ntdll.dll`.
 Build requirements:
 
 - Windows 11, x64
-- Visual Studio 2022 or Visual Studio Build Tools with:
+- Visual Studio 2022 or newer, or Visual Studio Build Tools, with:
   - Desktop development with C++
-  - MSVC C++ toolchain
-  - Windows SDK
+  - MSVC C++20 toolchain
+  - Windows 11 SDK
 - CMake 3.20 or newer
 - Ninja, only when using the Ninja commands below
 

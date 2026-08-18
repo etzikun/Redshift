@@ -1,5 +1,6 @@
 #pragma once
 
+#include "privacy_policy.h"
 #include <windows.h>
 #include <cstdlib>
 #include <filesystem>
@@ -53,7 +54,7 @@ inline std::filesystem::path LatestDiscord(const std::filesystem::path& root) {
 }
 
 inline std::filesystem::path DiscordInstallRoot(const std::filesystem::path& exe) {
-    if (_wcsicmp(exe.filename().c_str(), L"Discord.exe")) return {};
+    if (!privacy_policy::IsDiscordExecutableName(exe.native())) return {};
     int parts[3]{};
     if (!ParseAppFolder(exe.parent_path().filename().wstring(), parts)) return {};
     return exe.parent_path().parent_path();
@@ -71,6 +72,6 @@ inline std::filesystem::path ResolveDiscord(const std::filesystem::path& selecte
         if (const auto latest = LatestDiscord(root); !latest.empty()) return latest;
     }
     if (std::filesystem::is_regular_file(selected, error) &&
-        !_wcsicmp(selected.filename().c_str(), L"Discord.exe")) return selected;
+        privacy_policy::IsDiscordExecutableName(selected.native())) return selected;
     return LatestDiscord(DefaultDiscordRoot());
 }

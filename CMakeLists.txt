@@ -28,21 +28,23 @@ target_include_directories(detours PUBLIC ${DETOURS_DIR})
 target_compile_definitions(detours PRIVATE _CRT_STDIO_ARBITRARY_WIDE_SPECIFIERS)
 target_compile_options(detours PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/W3 /utf-8>)
 
-add_library(RedshiftPrivacyHook SHARED src/hook/hook.cpp src/hook/hook.def)
+add_library(RedshiftPrivacyHook SHARED
+    src/hook/hook.cpp src/hook/hook.def src/common/privacy_policy.cpp)
 target_compile_features(RedshiftPrivacyHook PRIVATE cxx_std_20)
 target_compile_definitions(RedshiftPrivacyHook PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(RedshiftPrivacyHook PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX /permissive- /guard:cf /sdl /EHsc /utf-8>)
 target_link_options(RedshiftPrivacyHook PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /GUARD:CF>)
-target_link_libraries(RedshiftPrivacyHook PRIVATE detours)
+target_link_libraries(RedshiftPrivacyHook PRIVATE detours ntdll)
+target_include_directories(RedshiftPrivacyHook PRIVATE src/common)
 
 add_executable(Redshift WIN32
-    src/app/main.cpp src/app/Redshift.rc
+    src/app/main.cpp src/app/Redshift.rc src/common/privacy_policy.cpp
     "${REDSHIFT_GENERATED_DIR}/app.manifest")
 target_compile_features(Redshift PRIVATE cxx_std_20)
 set_property(TARGET Redshift RedshiftPrivacyHook detours PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 target_compile_definitions(Redshift PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(Redshift PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX /permissive- /guard:cf /sdl /EHsc /utf-8>)
 target_link_options(Redshift PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /GUARD:CF>)
-target_include_directories(Redshift PRIVATE src/app "${REDSHIFT_GENERATED_DIR}")
-target_link_libraries(Redshift PRIVATE detours comctl32 comdlg32 dwmapi ole32 shell32 uuid uxtheme wintrust crypt32)
+target_include_directories(Redshift PRIVATE src/app src/common "${REDSHIFT_GENERATED_DIR}")
+target_link_libraries(Redshift PRIVATE detours comctl32 comdlg32 dwmapi ole32 shell32 uuid)
 install(TARGETS Redshift RedshiftPrivacyHook RUNTIME DESTINATION .)
