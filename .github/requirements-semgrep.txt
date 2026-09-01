@@ -1,2 +1,2 @@
 # Update this exact engine version only through a reviewed pull request.
-semgrep==1.173.0
+semgrep==1.175.0
