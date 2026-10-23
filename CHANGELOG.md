@@ -8,9 +8,10 @@
   C++, and added Detours provenance validation.
 - Replaced automatic Windows theme detection with a manual Light/Dark theme
   selection saved in Redshift's local settings.
-- Made the Discord path optional for `--launch`. Redshift now retrieves the
-  saved path through `discord_install` and resolves the newest installed
-  Discord version automatically.
+- Made the Discord path optional for `--launch`. Redshift finds the newest
+  `app-X.Y.Z\Discord.exe` under `%LOCALAPPDATA%\Discord` on the current machine.
+  A saved version folder or a path from another machine is ignored unless the
+  user chose a manual install outside that directory.
 - Centralized process visibility and injection decisions in a shared privacy
   policy with an explicit visible-process list, and separated process-list
   validation from filtering.

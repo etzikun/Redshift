@@ -54,11 +54,28 @@ inline std::filesystem::path LatestDiscord(const std::filesystem::path& root) {
     return latest;
 }
 
-inline std::filesystem::path DiscordInstallRoot(const std::filesystem::path& exe) {
-    if (!privacy_policy::IsDiscordExecutableName(exe.native())) return {};
-    int parts[3]{};
-    if (!ParseAppFolder(exe.parent_path().filename().wstring(), parts)) return {};
-    return exe.parent_path().parent_path();
+inline std::wstring NormalizedPath(const std::filesystem::path& path) {
+    if (path.empty()) return {};
+    std::wstring full(32768, L'\0');
+    const DWORD fullLength = GetFullPathNameW(
+        path.c_str(), static_cast<DWORD>(full.size()), full.data(), nullptr);
+    if (!fullLength || fullLength >= full.size()) return {};
+    std::wstring longer(32768, L'\0');
+    const DWORD longLength = GetLongPathNameW(
+        full.c_str(), longer.data(), static_cast<DWORD>(longer.size()));
+    std::wstring result = longLength && longLength < longer.size()
+        ? std::wstring(longer.data(), longLength) : std::wstring(full.data(), fullLength);
+    if (result.size() >= 7 && result[0] == L'\\' && result[1] == L'\\' &&
+        result[2] == L'?' && result[3] == L'\\' && result[5] == L':' && result[6] == L'\\')
+        result.erase(0, 4);
+    while (result.size() > 3 && (result.back() == L'\\' || result.back() == L'/')) result.pop_back();
+    return result;
+}
+
+inline bool IsUnderDirectory(const std::wstring& path, const std::wstring& root) {
+    if (root.empty() || path.size() <= root.size()) return false;
+    if (_wcsnicmp(path.c_str(), root.c_str(), root.size()) != 0) return false;
+    return path[root.size()] == L'\\' || path[root.size()] == L'/';
 }
 
 inline std::filesystem::path DefaultDiscordRoot() {
@@ -69,12 +86,54 @@ inline std::filesystem::path DefaultDiscordRoot() {
     return std::filesystem::path(local.data()) / L"Discord";
 }
 
+inline std::filesystem::path DiscordInstallRoot(const std::filesystem::path& exe) {
+    const auto normalized = NormalizedPath(exe);
+    if (normalized.empty() || !privacy_policy::IsDiscordExecutableName(normalized)) return {};
+    const auto parent = std::filesystem::path(normalized).parent_path();
+    int parts[3]{};
+    if (!ParseAppFolder(parent.filename().wstring(), parts)) return {};
+    return parent.parent_path();
+}
+
+inline bool IsStandardInstallRoot(const std::filesystem::path& root) {
+    if (root.empty()) return false;
+    std::vector<wchar_t> local(32768);
+    const DWORD length = GetEnvironmentVariableW(
+        L"LOCALAPPDATA", local.data(), static_cast<DWORD>(local.size()));
+    if (length == 0 || length >= local.size()) return false;
+    if (privacy_policy::IsVerifiedDiscordInstallationRoot(root.native(), local.data())) return true;
+    const auto normalizedRoot = NormalizedPath(root);
+    const auto normalizedLocal = NormalizedPath(local.data());
+    return !normalizedRoot.empty() && !normalizedLocal.empty() &&
+        privacy_policy::IsVerifiedDiscordInstallationRoot(normalizedRoot, normalizedLocal);
+}
+
+inline bool IsInsideStandardInstall(const std::filesystem::path& path) {
+    const auto root = DefaultDiscordRoot();
+    if (root.empty() || path.empty()) return false;
+    if (IsUnderDirectory(path.wstring(), root.wstring())) return true;
+    return IsUnderDirectory(NormalizedPath(path), NormalizedPath(root));
+}
+
+// A path selects an install only when it lives outside this machine's standard
+// Discord directory. Version folders and paths from another machine do not.
 inline std::filesystem::path ResolveDiscord(const std::filesystem::path& selected) {
-    std::error_code error;
-    if (const auto root = DiscordInstallRoot(selected); !root.empty()) {
-        if (const auto latest = LatestDiscord(root); !latest.empty()) return latest;
+    const auto standardRoot = DefaultDiscordRoot();
+    const auto selectedRoot = DiscordInstallRoot(selected);
+    if (!selectedRoot.empty() && !IsStandardInstallRoot(selectedRoot)) {
+        if (const auto latest = LatestDiscord(selectedRoot); !latest.empty()) return latest;
     }
-    if (std::filesystem::is_regular_file(selected, error) &&
-        privacy_policy::IsDiscordExecutableName(selected.native())) return selected;
-    return LatestDiscord(DefaultDiscordRoot());
+    std::error_code error;
+    const auto normalized = NormalizedPath(selected);
+    if (!normalized.empty() && !IsInsideStandardInstall(normalized) &&
+        std::filesystem::is_regular_file(normalized, error) &&
+        privacy_policy::IsDiscordExecutableName(normalized))
+        return normalized;
+    return LatestDiscord(standardRoot);
+}
+
+inline std::wstring ManualDiscordSetting(const std::filesystem::path& shown) {
+    const auto resolved = ResolveDiscord(shown);
+    if (resolved.empty() || IsInsideStandardInstall(resolved)) return {};
+    return resolved.wstring();
 }

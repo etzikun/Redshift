@@ -58,11 +58,13 @@ bool LoadVerifiedDiscordInstallationRoot() {
         GetEnvironmentVariableW(kDiscordRootVariable, root, ARRAYSIZE(root));
     if (!rootLength || rootLength >= ARRAYSIZE(root)) return false;
 
-    wchar_t localAppData[MAX_PATH]{};
-    const DWORD localLength =
-        GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, ARRAYSIZE(localAppData));
-    if (!localLength || localLength >= ARRAYSIZE(localAppData) ||
-        !privacy_policy::IsVerifiedDiscordInstallationRoot(root, localAppData)) return false;
+    // The running executable has to be app-X.Y.Z\Discord.exe directly under the
+    // root Redshift passed. That accepts this machine's standard install and a
+    // manual install, and rejects a root widened to a parent directory.
+    wchar_t host[MAX_PATH]{};
+    const DWORD hostLength = GetModuleFileNameW(nullptr, host, ARRAYSIZE(host));
+    if (!hostLength || hostLength >= ARRAYSIZE(host) ||
+        !privacy_policy::ShouldInjectInto(host, root)) return false;
     return wcscpy_s(g_verifiedDiscordRoot, root) == 0;
 }
 

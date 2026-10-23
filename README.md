@@ -35,18 +35,19 @@ outputs together:
 Quit Discord completely before launching it through Redshift. An already existing
 Discord instance cannot be protected.
 
-Redshift supports the standard Discord installation at
-`%LOCALAPPDATA%\Discord`. The selected executable must be
-`app-X.Y.Z\Discord.exe` under that directory.
+On each launch, Redshift finds Discord for the current machine at
+`%LOCALAPPDATA%\Discord` and uses the newest `app-X.Y.Z\Discord.exe` there.
+A saved version folder, or a path left from another machine, is not reused.
 
 1. Run `Redshift.exe`.
-2. Select the installed `Discord.exe` if it was not detected automatically.
+2. Choose a different `Discord.exe` only when Discord is installed somewhere else.
 3. Click **Launch protected Discord**.
 
-Discord installs updates into versioned `app-*` directories. A saved path is
-resolved to the newest installed `Discord.exe` before each launch. The selected
-path and the Light/Dark theme choice are stored locally in
-`%LOCALAPPDATA%\Redshift\settings.ini`.
+Discord installs updates into versioned `app-*` directories. Redshift resolves
+the newest build in the standard install before each launch. A manual install
+outside `%LOCALAPPDATA%\Discord` is saved and rolled forward to the newest
+`app-X.Y.Z\Discord.exe` in that directory. The manual path and the Light/Dark
+theme choice are stored locally in `%LOCALAPPDATA%\Redshift\settings.ini`.
 
 Explicit launch errors are appended to `%LOCALAPPDATA%\Redshift\launch.log`.
 Successful launches are not logged. Redshift runs entirely locally and does not
@@ -62,14 +63,14 @@ to **Target**:
 "C:\Tools\Redshift\Redshift.exe" --launch
 ```
 
-This quick-start mode uses the saved Discord location, resolves the newest
-installed version automatically, and exits after a verified launch. Redshift
-does not show a window on success. If the launch fails, its normal window opens
-and displays the error.
+This quick-start mode uses the current machine's standard Discord install, or a
+saved manual install path, resolves the newest version automatically, and exits
+after a verified launch. Redshift does not show a window on success. If the
+launch fails, its normal window opens and displays the error.
 
-If no location has been saved, Redshift checks Discord's normal install
-location. The older `--launch "path\to\Discord.exe"` form is also supported.
-The shortcut only needs updating if `Redshift.exe` is moved.
+`--launch "path\to\Discord.exe"` uses that path when it points at a manual
+install. A path under `%LOCALAPPDATA%\Discord` still launches the newest build
+there. The shortcut only needs updating if `Redshift.exe` is moved.
 
 ## How it works
 
@@ -81,10 +82,10 @@ The complete intercepted API surface is:
 - `Process32FirstW` and `Process32NextW`
 - `CreateProcessW`
 
-`CreateProcessW` propagation is restricted to
-`%LOCALAPPDATA%\Discord\Update.exe` and
-`%LOCALAPPDATA%\Discord\app-X.Y.Z\Discord.exe`. Other child applications are
-started normally.
+`CreateProcessW` propagation is restricted to `Update.exe` and
+`app-X.Y.Z\Discord.exe` under the install root used for that launch. The root
+is `%LOCALAPPDATA%\Discord` unless a manual install path was chosen. Other
+child applications are started normally.
 
 The native `NtQuerySystemInformation` function is linked normally through the
 Windows SDK's `ntdll.lib`.

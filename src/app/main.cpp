@@ -191,7 +191,9 @@ bool SetLaunchErrorAndAppendLog(std::wstring& error, const std::wstring& message
 void WriteSettings() {
     const auto path = SettingsPath();
     // SIDE EFFECT: write the complete local settings policy.
-    WritePrivateProfileStringW(L"discord", L"executable", Text(g_path).c_str(), path.c_str());
+    // The standard install is rediscovered on this machine, so only a manual path is stored.
+    WritePrivateProfileStringW(L"discord", L"executable",
+        ManualDiscordSetting(Text(g_path)).c_str(), path.c_str());
     WritePrivateProfileStringW(L"appearance", L"theme", g_theme.dark ? L"dark" : L"light",
         path.c_str());
 }
@@ -230,13 +232,9 @@ bool LaunchDiscordWithPrivacyHook(std::filesystem::path target, std::wstring& er
         return SetLaunchErrorAndAppendLog(error, L"Select Discord.exe.");
     }
     if (!IsX64(target)) return SetLaunchErrorAndAppendLog(error, L"Not a 64-bit Discord.exe.");
-    const auto discordRoot = target.parent_path().parent_path();
-    const auto expectedRoot = DefaultDiscordRoot();
-    if (!privacy_policy::IsVerifiedDiscordInstallationRoot(
-            discordRoot.native(), expectedRoot.parent_path().native())) {
-        return SetLaunchErrorAndAppendLog(error, L"Discord must be installed under %LOCALAPPDATA%\\Discord.");
-    }
-    if (!privacy_policy::ShouldInjectInto(target.native(), discordRoot.native()))
+    const auto discordRoot = DiscordInstallRoot(target);
+    if (discordRoot.empty() ||
+        !privacy_policy::ShouldInjectInto(target.native(), discordRoot.native()))
         return SetLaunchErrorAndAppendLog(error, L"Discord.exe must be inside an app-X.Y.Z directory.");
     if (DiscordIsRunning()) return SetLaunchErrorAndAppendLog(error, L"Quit Discord first.");
     auto hook = ModuleDir() / L"RedshiftPrivacyHook.dll";
